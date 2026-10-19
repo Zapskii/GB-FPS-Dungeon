@@ -230,9 +230,16 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   case ~271k -> ~76k T, simulated). Start view still 33 images / 4 s
   (~0.2 frames saved, under one image); the BFS gain shows as less
   stutter while enemies re-path, not at the static start view.
+- Build G (PLAN.md wave 2): `copy_view` copies per tile column only rows
+  [min top, max bot) of this image's rays united with the span last
+  written to the same VRAM bank (`r_vh`); `view_reset()` after level load
+  and the Select map. Profiler at the start view: copy 2.28 -> 2.04
+  frames (-16.9k T; near side walls fill most rows here, so the gain
+  grows in open views). Total 7.39 (build E) -> 6.96 frames per image.
+  Checked in gearboy: no stale strips turning, at a wall, after the map.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Builds 5–F are not yet checked on hardware: effects were tuned without
+- Builds 5–G are not yet checked on hardware: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
 - Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health

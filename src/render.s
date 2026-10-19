@@ -1299,3 +1299,119 @@ cv_loop:
         dec     b
         jr      NZ, cv_loop
         ret
+
+; ---------------------------------------------------------------
+; copy_view: like copy_vbuf (same STAT-poll + store body), but per tile
+; column only rows [t, b): t/b = the union of this image's span (min top,
+; max bot of the column's 4 rays, read from r_top/r_bot, still valid
+; after render_asm) and the span last copied into this bank (r_vh, set
+; by C's view_reset to [0, 64) = copy all). Rows outside a span are pure
+; ceiling/floor pattern, the same in every column and image (fill writes
+; rows [0,mintop) and [maxbot,64) only from ceil_blk/floor_blk; ragged
+; patches and mortar stay inside [top, bot)), so they are already right
+; in VRAM. r_vh: [0..15] bank 0x8000 tops, [16..31] bank 0x9000 tops,
+; [32..63] the bots. Uses r_tc (fill's, free by now).
+; ---------------------------------------------------------------
+_copy_view::
+        xor     a
+        ld      (_r_tc), a
+cw_col:
+        ld      a, (_r_tc)
+        add     a, a
+        add     a, a
+        ld      e, a
+        ld      d, #0                  ; DE = 4*tc
+        ld      hl, #_r_top            ; C = min top
+        add     hl, de
+        ld      a, (hl+)
+        cp      (hl)
+        jr      C, 1$
+        ld      a, (hl)
+1$:     inc     hl
+        cp      (hl)
+        jr      C, 2$
+        ld      a, (hl)
+2$:     inc     hl
+        cp      (hl)
+        jr      C, 3$
+        ld      a, (hl)
+3$:     ld      c, a
+        ld      hl, #_r_bot            ; B = max bot
+        add     hl, de
+        ld      a, (hl+)
+        cp      (hl)
+        jr      NC, 4$
+        ld      a, (hl)
+4$:     inc     hl
+        cp      (hl)
+        jr      NC, 5$
+        ld      a, (hl)
+5$:     inc     hl
+        cp      (hl)
+        jr      NC, 6$
+        ld      a, (hl)
+6$:     ld      b, a
+        ; history: r_vh[bank*16 + tc] (top), +32 (bot); store new, merge old
+        ld      a, (_r_dst+1)
+        and     #0x10                  ; 0x80 -> 0, 0x90 -> 16
+        ld      e, a
+        ld      a, (_r_tc)
+        add     a, e
+        ld      e, a                   ; D = 0
+        ld      hl, #_r_vh
+        add     hl, de
+        ld      a, (hl)
+        ld      (hl), c
+        cp      c
+        jr      NC, 7$
+        ld      c, a                   ; C = min(new, old) top
+7$:     ld      de, #32
+        add     hl, de
+        ld      a, (hl)
+        ld      (hl), b
+        cp      b
+        jr      C, 8$
+        ld      b, a                   ; B = max(new, old) bot
+8$:     ld      a, b
+        sub     c
+        ld      b, a                   ; B = pairs (> 0: top <= 31 < 33 <= bot)
+        ; DE = tc*128 + 2*t (2*t <= 126, no carry into D)
+        ld      a, (_r_tc)
+        srl     a
+        ld      d, a
+        ld      a, #0
+        rra
+        ld      e, a
+        ld      a, c
+        add     a, a
+        add     a, e
+        ld      e, a
+        ld      hl, #_vbuf
+        add     hl, de
+        push    hl
+        ld      a, (_r_dst)
+        ld      l, a
+        ld      a, (_r_dst+1)
+        ld      h, a
+        add     hl, de
+        ld      d, h
+        ld      e, l                   ; DE = dst (even)
+        pop     hl                     ; HL = src
+cw_loop:
+        ldh     a, (STATR)
+        and     #0x02
+        jr      NZ, cw_loop
+        ld      a, (hl+)
+        ld      (de), a
+        inc     e                      ; pairs never straddle 256 (even dst)
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        dec     b
+        jr      NZ, cw_loop
+        ld      a, (_r_tc)
+        inc     a
+        ld      (_r_tc), a
+        cp      #16
+        jp      NZ, cw_col
+        ret

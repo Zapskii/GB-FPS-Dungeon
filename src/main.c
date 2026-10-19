@@ -60,6 +60,7 @@ extern volatile uint8_t vbl_count, flash_n, flash_pal, flip_req, images;
 void vbl_handler(void);
 void render_asm(void);
 void copy_vbuf(void);
+void copy_view(void);
 
 /* Scratch read/written by render.s — keep names in sync with the asm. */
 uint8_t r_dx, r_dy, r_side, r_wall;
@@ -73,6 +74,7 @@ uint8_t *r_hits[64];         /* map cell each ray hit (automap) */
 uint8_t r_tc, r_cb[2], r_mxt, r_mnb, r_lo, r_hi, r_j, r_m, r_wl, r_wh;
 uint8_t r_y0, r_y1;
 uint16_t r_dst;
+uint8_t r_vh[64];            /* copy_view: span last copied per bank+column */
 uint8_t vbuf[2048];          /* 128x64 bitmap in column-major tile order */
 
 uint8_t imap[1024];          /* char map -> collision/ray map */
@@ -572,6 +574,15 @@ static void draw_map(void)
     if (seen[((uint16_t)stairs_y << 5) + stairs_x]) plot_cell(stairs_y, stairs_x, 0u);
 }
 
+/* Forget both banks' spans: the next two copy_view calls copy everything.
+ * Needed at boot and whenever something else writes view tiles 0..127. */
+static void view_reset(void)
+{
+    uint8_t i;
+
+    for (i = 0u; i < 32u; i++) { r_vh[i] = 0u; r_vh[i + 32u] = 64u; }
+}
+
 /* Paused overhead map until Select (or A/B/Start) is pressed again. */
 static void show_map(void)
 {
@@ -581,6 +592,7 @@ static void show_map(void)
     while (flip_req) ;                   /* hidden bank settled */
     r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;
     copy_vbuf();
+    view_reset();                        /* the map replaced that bank's view */
     /* arrow centre is pixel (3,3) of its tile; OAM = screen + (8, 16) */
     set_sprite_tile(0u, (uint8_t)(SPR_ARROW + ((((uint8_t)(cam_a + 16u)) >> 5) << 1)));
     set_sprite_prop(0u, S_PALETTE);      /* white */
@@ -787,7 +799,7 @@ static void init_screen(void)
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = glyph('F');              /* build marker */
+    row[10] = glyph('G');              /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
@@ -834,6 +846,7 @@ void main(void)
     initrand((uint16_t)(((uint16_t)DIV_REG << 8) | vbl_count));   /* Start timing = seed */
 #endif
     load_level(0u);
+    view_reset();
     last_vbl = vbl_count;
 
     while (1) {
@@ -870,7 +883,7 @@ void main(void)
         while (flip_req) ;               /* last image shown: banks settled */
         PROF(3);
         r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;   /* hidden bank */
-        copy_vbuf();
+        copy_view();                     /* only rows that can differ */
         PROF(4);
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
         PROF(5);
