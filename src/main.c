@@ -71,8 +71,7 @@ uint8_t r_top[64], r_bot[64], r_clr[64], r_zb[64];
 uint8_t r_wt[64];            /* wall type 1..3 | side << 7 per column */
 int16_t r_s2x, r_s2y, r_ox, r_oy;   /* 2*step, odd-column start */
 uint8_t *r_hits[64];         /* map cell each ray hit (automap) */
-uint8_t r_tc, r_cb[2], r_mxt, r_mnb, r_lo, r_hi, r_j, r_m, r_wl, r_wh;
-uint8_t r_y0, r_y1;
+uint8_t r_tc, r_cb[2], r_pt[2], r_mxt, r_mnb, r_lo, r_hi, r_m;
 uint16_t r_dst;
 uint8_t r_vh[64];            /* copy_view: span last copied per bank+column */
 uint8_t vbuf[2048];          /* 128x64 bitmap in column-major tile order */
@@ -799,7 +798,7 @@ static void init_screen(void)
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = glyph('G');              /* build marker */
+    row[10] = glyph('H');              /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
@@ -819,12 +818,9 @@ static void setup_rays(void)
 
 static void render_view(void)
 {
-    uint8_t k;
-
     setup_rays();
-    render_asm();
+    render_asm();                       /* also marks seen[] for every ray's hit */
     PROF(1);
-    for (k = 0u; k < 64u; k++) seen[(uint16_t)(r_hits[k] - imap)] = 1u;
     PROF(2);
 }
 

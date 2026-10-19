@@ -237,9 +237,16 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   frames (-16.9k T; near side walls fill most rows here, so the gain
   grows in open views). Total 7.39 (build E) -> 6.96 frames per image.
   Checked in gearboy: no stale strips turning, at a wall, after the map.
+- Build H (PLAN.md wave 3): unrolled ragged-edge patch (RTOP/RBOT
+  macros), colour pass folded into ray_cs + a short fog loop, seen[]
+  marked in dda_hx/dda_hy instead of the C loop. Byte-identical to G on
+  3,300 random views in an SM83 interpreter. Profiler at the start view:
+  render_asm -39.5k T, seen[] 0.15 -> 0.02; total 6.26 frames per image
+  (~9.6 fps, HUD shows 09-10). Remaining per-label hot spots: wall-band
+  loop f_cl ~28k T, mortar ~30k T, rd_step2 ~15k T.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Builds 5–G are not yet checked on hardware: effects were tuned without
+- Builds 5–H are not yet checked on hardware: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
 - Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health
