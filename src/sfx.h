@@ -17,9 +17,10 @@
 #define SFX_DOOR   3u
 #define SFX_STAIRS 4u
 #define SFX_KILL   5u
+#define SFX_HIT    6u   /* enemy hit but not killed */
 
 /* NR10 NR11 NR12 NR13 NR14 | NR41 NR42 NR43 NR44 */
-static const uint8_t sfx_tab[6u][9u] = {
+static const uint8_t sfx_tab[7u][9u] = {
     /* SHOOT: 62 ms mid noise burst */
     { 0x00u, 0x00u, 0x00u, 0x00u, 0x00u,   0x30u, 0xF1u, 0x52u, 0xC0u },
     /* HURT: 250 ms low square, sweep down */
@@ -31,7 +32,9 @@ static const uint8_t sfx_tab[6u][9u] = {
     /* STAIRS: slow descending tone, envelope fades out in ~375 ms */
     { 0x3Du, 0x80u, 0xC2u, 0x00u, 0x87u,   0x00u, 0x00u, 0x00u, 0x00u },
     /* KILL: high noise crack + falling square, both 125 ms */
-    { 0x1Au, 0xA0u, 0xF1u, 0x80u, 0xC7u,   0x20u, 0xF2u, 0x34u, 0xC0u }
+    { 0x1Au, 0xA0u, 0xF1u, 0x80u, 0xC7u,   0x20u, 0xF2u, 0x34u, 0xC0u },
+    /* HIT: 60 ms high blip */
+    { 0x00u, 0x8Cu, 0xA1u, 0x40u, 0xC7u,   0x00u, 0x00u, 0x00u, 0x00u }
 };
 
 static void sfx_init(void)
@@ -45,7 +48,7 @@ static void sfx_play(uint8_t id)
 {
     const uint8_t *r;
 
-    if (id > SFX_KILL) return;
+    if (id > SFX_HIT) return;
     r = sfx_tab[id];
     if (r[4]) {
         NR10_REG = r[0];

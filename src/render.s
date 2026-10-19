@@ -408,43 +408,225 @@ dda_dy:
         ret
 
 ; ---------------------------------------------------------------
-; render_asm: cast 64 rays, then fill the 16 tile columns of _vbuf.
-; Per ray k: r_top/r_bot (pixel rows), r_clr (colour 0..3), r_zb
-; (perp distance in 1/8 cells, for sprite occlusion).
-; Colours: x-facing wall 0, y-facing wall 1, door 2; the first ray on a
+; render_asm: 64 columns, then fill the 16 tile columns of _vbuf.
+; Rays: even columns are always cast; an odd column whose neighbours hit
+; the same map cell from the same side is interpolated (H is linear in
+; screen x across a flat face, so the average is exact up to rounding),
+; otherwise it is cast too. Column 63 is always cast.
+; Per column k: r_top/r_bot (pixel rows), r_zb (perp distance in 1/8
+; cells, sprite occlusion + fog), r_hits (cell, automap), r_wt (wall type
+; 1..3 | side << 7), then r_clr from the colour pass.
+; Colours: x-facing wall 0, y-facing wall 1, door 2; the first column on a
 ; new map cell or face draws its edge one shade darker (2, door 3).
 ; ---------------------------------------------------------------
 _render_asm::
+        ; odd-pass start = rd0 + step, both passes advance by 2*step
+        ld      a, (_r_stx)
+        ld      l, a
+        ld      a, (_r_stx+1)
+        ld      h, a
+        ld      a, (_r_rdx)
+        ld      e, a
+        ld      a, (_r_rdx+1)
+        ld      d, a
+        push    hl
+        add     hl, de
+        ld      a, l
+        ld      (_r_ox), a
+        ld      a, h
+        ld      (_r_ox+1), a
+        pop     hl
+        add     hl, hl
+        ld      a, l
+        ld      (_r_s2x), a
+        ld      a, h
+        ld      (_r_s2x+1), a
+        ld      a, (_r_sty)
+        ld      l, a
+        ld      a, (_r_sty+1)
+        ld      h, a
+        ld      a, (_r_rdy)
+        ld      e, a
+        ld      a, (_r_rdy+1)
+        ld      d, a
+        push    hl
+        add     hl, de
+        ld      a, l
+        ld      (_r_oy), a
+        ld      a, h
+        ld      (_r_oy+1), a
+        pop     hl
+        add     hl, hl
+        ld      a, l
+        ld      (_r_s2y), a
+        ld      a, h
+        ld      (_r_s2y+1), a
+
+        ; ---- even columns
         xor     a
         ld      (_r_k), a
-ray_loop:
+ev_loop:
+        call    ray_cs
+        call    rd_step2
+        ld      a, (_r_k)
+        add     a, #2
+        ld      (_r_k), a
+        cp      #64
+        jr      C, ev_loop
+
+        ; ---- odd columns
+        ld      a, (_r_ox)
+        ld      (_r_rdx), a
+        ld      a, (_r_ox+1)
+        ld      (_r_rdx+1), a
+        ld      a, (_r_oy)
+        ld      (_r_rdy), a
+        ld      a, (_r_oy+1)
+        ld      (_r_rdy+1), a
+        ld      a, #1
+        ld      (_r_k), a
+od_loop:
+        ld      a, (_r_k)
+        cp      #63
+        jr      Z, od_cast
+        ld      e, a
+        ld      d, #0
+        ld      hl, #(_r_wt - 1)
+        add     hl, de
+        ld      a, (hl+)               ; wt[k-1]
+        inc     hl
+        cp      (hl)                   ; wt[k+1]
+        jr      NZ, od_cast
+        ld      hl, #(_r_hits - 2)
+        add     hl, de
+        add     hl, de
+        ld      a, (hl+)
+        ld      c, a                   ; hits[k-1]
+        ld      a, (hl+)
+        ld      b, a
+        inc     hl
+        inc     hl
+        ld      a, (hl+)               ; hits[k+1]
+        cp      c
+        jr      NZ, od_cast
+        ld      a, (hl)
+        cp      b
+        jr      NZ, od_cast
+        ; same cell and face: copy hits/wt, average top/bot/zb
+        ld      hl, #_r_hits
+        add     hl, de
+        add     hl, de
+        ld      a, c
+        ld      (hl+), a
+        ld      (hl), b
+        ld      hl, #(_r_wt - 1)
+        add     hl, de
+        ld      a, (hl+)
+        ld      (hl), a
+        ld      hl, #_r_top
+        call    od_avg
+        ld      hl, #_r_bot
+        call    od_avg
+        ld      hl, #_r_zb
+        call    od_avg
+        jr      od_next
+od_cast:
+        call    ray_cs
+od_next:
+        call    rd_step2
+        ld      a, (_r_k)
+        add     a, #2
+        ld      (_r_k), a
+        cp      #64
+        jr      C, od_loop
+
+        ; ---- colour pass (needs every column's neighbour on the left)
+        xor     a
+        ld      (_r_k), a
+cl_loop:
+        ld      a, (_r_k)
+        ld      e, a
+        ld      d, #0
+        ld      hl, #_r_wt
+        add     hl, de
+        ld      a, (hl)
+        ld      c, a                   ; C = wt
+        and     #3
+        cp      #3
+        jr      NZ, cl_wall
+        ld      b, #2                  ; door
+        jr      cl_edge
+cl_wall:
+        ld      a, c
+        rlca
+        and     #1
+        ld      b, a                   ; side
+cl_edge:
+        ld      a, e
+        or      a
+        jr      Z, cl_keep
+        dec     hl
+        ld      a, (hl)                ; wt[k-1]
+        cp      c
+        jr      NZ, cl_dark
+        ld      hl, #(_r_hits - 2)
+        add     hl, de
+        add     hl, de
+        ld      a, (hl+)               ; hits[k-1] lo
+        inc     hl
+        cp      (hl)                   ; hits[k] lo
+        jr      NZ, cl_dark
+        dec     hl
+        ld      a, (hl+)               ; hits[k-1] hi
+        inc     hl
+        cp      (hl)                   ; hits[k] hi
+        jr      Z, cl_keep
+cl_dark:
+        ld      a, b
+        cp      #2
+        ld      b, #2                  ; wall edge
+        jr      C, cl_keep
+        ld      b, #3                  ; door edge
+cl_keep:
+        ; fog (walls, colour < 2): right pixel one shade darker from
+        ; FOG_NEAR cells, both pixels from FOG_FAR (1-px vertical dither).
+        ; r_clr = left | right << 2. Doors/edges (2, 3) are left alone so
+        ; nothing fades into the black horizon band.
+        ld      c, b
+        ld      a, b
+        cp      #2
+        jr      NC, fg_pk
+        ld      hl, #_r_zb
+        add     hl, de
+        ld      a, (hl)
+        cp      #(FOG_NEAR * 8)
+        jr      C, fg_pk
+        inc     c
+        cp      #(FOG_FAR * 8)
+        jr      C, fg_pk
+        inc     b
+fg_pk:
+        ld      a, c
+        add     a, a
+        add     a, a
+        or      b
+        ld      hl, #_r_clr
+        add     hl, de
+        ld      (hl), a
+        ld      a, e
+        inc     a
+        ld      (_r_k), a
+        cp      #64
+        jp      C, cl_loop
+        jp      fill_go
+
+; Cast column _r_k along (_r_rdx, _r_rdy); store top/bot/zb/hits/wt.
+ray_cs:
         ld      a, (_r_rdx+1)
         ld      (_r_dx), a
         ld      a, (_r_rdy+1)
         ld      (_r_dy), a
         call    cast_ray
-        ; step the ray direction along the camera plane
-        ld      a, (_r_stx)
-        ld      b, a
-        ld      a, (_r_rdx)
-        add     a, b
-        ld      (_r_rdx), a
-        ld      a, (_r_stx+1)
-        ld      b, a
-        ld      a, (_r_rdx+1)
-        adc     a, b
-        ld      (_r_rdx+1), a
-        ld      a, (_r_sty)
-        ld      b, a
-        ld      a, (_r_rdy)
-        add     a, b
-        ld      (_r_rdy), a
-        ld      a, (_r_sty+1)
-        ld      b, a
-        ld      a, (_r_rdy+1)
-        adc     a, b
-        ld      (_r_rdy+1), a
-
         ; H = ht[min(perp >> 3, 1023)]
         ld      a, (_r_dist+1)
         cp      #0x20
@@ -504,87 +686,64 @@ zb_w:
         add     hl, de
         ld      (hl), a
 
-        ; colour
-        ld      a, (_r_wall)
-        cp      #3
-        jr      NZ, cl_wall
-        ld      b, #2
-        jr      cl_edge
-cl_wall:
-        ld      a, (_r_side)
-        ld      b, a
-cl_edge:
-        ld      a, (_r_k)
-        or      a
-        jr      Z, cl_keep
-        ld      hl, #_r_prevp
-        ld      a, (_r_hit)
-        cp      (hl)
-        jr      NZ, cl_dark
-        inc     hl
-        ld      a, (_r_hit+1)
-        cp      (hl)
-        jr      NZ, cl_dark
-        ld      a, (_r_prevs)
-        ld      c, a
-        ld      a, (_r_side)
-        cp      c
-        jr      Z, cl_keep
-cl_dark:
-        ld      a, b
-        cp      #2
-        ld      b, #2                  ; wall edge
-        jr      C, cl_keep
-        ld      b, #3                  ; door edge
-cl_keep:
-        ld      a, (_r_hit)
-        ld      (_r_prevp), a
-        ld      a, (_r_hit+1)
-        ld      (_r_prevp+1), a
-        ld      a, (_r_side)
-        ld      (_r_prevs), a
-        ld      hl, #_r_hits           ; automap: remember the cell this ray saw
+        ld      hl, #_r_hits           ; automap: the cell this ray saw
         add     hl, de
         add     hl, de
         ld      a, (_r_hit)
         ld      (hl+), a
         ld      a, (_r_hit+1)
         ld      (hl), a
-        ; fog (walls, colour < 2): right pixel one shade darker from
-        ; FOG_NEAR cells, both pixels from FOG_FAR (1-px vertical dither).
-        ; r_clr = left | right << 2. Doors/edges (2, 3) are left alone so
-        ; nothing fades into the black horizon band.
-        ld      c, b
-        ld      a, b
-        cp      #2
-        jr      NC, fg_pk
-        ld      a, (_r_dist+1)
-        cp      #FOG_NEAR
-        jr      C, fg_pk
-        inc     c
-        cp      #FOG_FAR
-        jr      C, fg_pk
-        inc     b
-fg_pk:
-        ld      a, c
-        add     a, a
-        add     a, a
-        or      b
+        ld      a, (_r_side)
+        rrca                           ; side -> bit 7
         ld      b, a
-        ld      hl, #_r_clr
+        ld      a, (_r_wall)
+        or      b
+        ld      hl, #_r_wt
         add     hl, de
-        ld      (hl), b
+        ld      (hl), a
+        ret
 
-        ld      a, (_r_k)
-        inc     a
-        ld      (_r_k), a
-        cp      #64
-        jp      NZ, ray_loop
+; ray direction += 2 * step
+rd_step2:
+        ld      a, (_r_s2x)
+        ld      b, a
+        ld      a, (_r_rdx)
+        add     a, b
+        ld      (_r_rdx), a
+        ld      a, (_r_s2x+1)
+        ld      b, a
+        ld      a, (_r_rdx+1)
+        adc     a, b
+        ld      (_r_rdx+1), a
+        ld      a, (_r_s2y)
+        ld      b, a
+        ld      a, (_r_rdy)
+        add     a, b
+        ld      (_r_rdy), a
+        ld      a, (_r_s2y+1)
+        ld      b, a
+        ld      a, (_r_rdy+1)
+        adc     a, b
+        ld      (_r_rdy+1), a
+        ret
+
+; HL = byte array, DE = k: a[k] = (a[k-1] + a[k+1]) / 2. Keeps DE.
+od_avg:
+        add     hl, de
+        dec     hl
+        ld      a, (hl+)
+        inc     hl
+        add     a, (hl)
+        rra                            ; 9-bit sum / 2
+        dec     hl
+        ld      (hl), a
+        ret
 
 ; ---- fill: per tile column (4 rays), rows [0,maxtop) ceiling,
 ; [maxtop,minbot) all-wall, [minbot,64) floor, then patch each ray's
 ; ragged ends with read-modify-write. Every top <= 31 < 33 <= every
 ; bot (ht >= 2), so the all-wall core is never empty.
+fill_go:
         xor     a
         ld      (_r_tc), a
 fill_col:
@@ -814,6 +973,94 @@ rg_next:
         ld      (_r_tc), a
         cp      #16
         jp      NZ, fill_col
+
+; ---- '=' walls: dark mortar rows at 1/4, 1/2 and 3/4 of the wall height
+; (fractions of the projected height, so they converge with perspective).
+        xor     a
+        ld      (_r_k), a
+mo_loop:
+        ld      a, (_r_k)
+        ld      e, a
+        ld      d, #0
+        ld      hl, #_r_wt
+        add     hl, de
+        ld      a, (hl)
+        and     #3
+        cp      #2
+        jr      NZ, mo_next
+        ld      hl, #_r_top
+        add     hl, de
+        ld      b, (hl)                ; B = top
+        ld      hl, #_r_bot
+        add     hl, de
+        ld      a, (hl)
+        sub     b                      ; H
+        cp      #8
+        jr      C, mo_next             ; too small to show bricks
+        srl     a
+        srl     a
+        ld      c, a                   ; C = H / 4
+        ; column base = vbuf + (k >> 2) * 128
+        ld      a, e
+        srl     a
+        srl     a
+        srl     a
+        ld      h, a
+        ld      a, #0
+        rra
+        ld      l, a
+        push    de
+        ld      de, #_vbuf
+        add     hl, de
+        pop     de
+        ld      a, l
+        ld      (_r_cb), a
+        ld      a, h
+        ld      (_r_cb+1), a
+        ; mask = 0xC0 >> 2 * (k & 3)
+        ld      a, e
+        and     #3
+        ld      l, a
+        ld      a, #0xC0
+        inc     l
+mo_ms:
+        dec     l
+        jr      Z, mo_mh
+        srl     a
+        srl     a
+        jr      mo_ms
+mo_mh:
+        ld      (_r_m), a
+        ld      a, b
+        add     a, c
+        call    mo_row
+        add     a, c
+        call    mo_row
+        add     a, c
+        call    mo_row
+mo_next:
+        ld      a, (_r_k)
+        inc     a
+        ld      (_r_k), a
+        cp      #64
+        jp      C, mo_loop
+        ret
+
+; A = pixel row: this column's 2 pixels -> colour 2. Keeps AF, BC, DE.
+mo_row:
+        push    af
+        push    de
+        call    rg_addr
+        ld      a, (_r_m)
+        ld      d, a
+        cpl
+        and     (hl)
+        ld      (hl+), a
+        ld      a, (hl)
+        or      d
+        ld      (hl), a
+        pop     de
+        pop     af
         ret
 
 ; B rows from table DE to HL (2 bytes per row).

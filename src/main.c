@@ -16,7 +16,10 @@
 #include "tables.h"
 #include "hud.h"
 #include "enemies.h"
-#include "levels.h"
+#include <rand.h>
+#include "mazegen.h"
+
+#define NLEVELS 4u                      /* floors per run, generated on load */
 #include "sfx.h"
 #include "frame.h"
 #include "gun.h"
@@ -61,9 +64,11 @@ void copy_vbuf(void);
 /* Scratch read/written by render.s — keep names in sync with the asm. */
 uint8_t r_dx, r_dy, r_adx, r_ady, r_sx, r_sy, r_side, r_steps, r_wall;
 uint8_t r_ddx[2], r_ddy[2], r_sdx[2], r_sdy[2], r_frac[2], r_dist[2];
-uint8_t r_hit[2], r_prevp[2], r_prevs, r_k;
+uint8_t r_hit[2], r_k;
 int16_t r_rdx, r_rdy, r_stx, r_sty;   /* ray dir accumulators, 8.8 */
 uint8_t r_top[64], r_bot[64], r_clr[64], r_zb[64];
+uint8_t r_wt[64];            /* wall type 1..3 | side << 7 per column */
+int16_t r_s2x, r_s2y, r_ox, r_oy;   /* 2*step, odd-column start */
 uint8_t *r_hits[64];         /* map cell each ray hit (automap) */
 uint8_t r_tc, r_cb[2], r_mxt, r_mnb, r_lo, r_hi, r_j, r_m, r_wl, r_wh;
 uint8_t r_y0, r_y1;
@@ -93,7 +98,8 @@ static uint16_t ex[NENEMY], ey[NENEMY];
 static uint8_t ealive[NENEMY];
 static uint8_t dmg_cd;
 static uint8_t level_no, item_n, stairs_x, stairs_y;
-static uint8_t item_x[8], item_y[8], item_taken[8];
+static uint8_t item_x[8], item_y[8], item_taken[8], item_kind[8];   /* kind: 0 key, 1 health */
+static uint8_t ehp[NENEMY], ehit[NENEMY];   /* enemy hits left, hit-flash ticks */
 
 
 static uint8_t blocked(uint16_t x, uint16_t y);
@@ -103,7 +109,11 @@ static void load_level(uint8_t n)
 {
     uint16_t i;
     uint8_t ne = 0u;
-    const uint8_t *m = level_data[n];
+    const uint8_t *m = vbuf;
+
+    /* new maze into vbuf (free until the next render); seen[] and the back
+     * half of vbuf are the generator's scratch, both rewritten below/later */
+    maze_generate(n, vbuf, seen, (uint16_t *)(vbuf + 1024u));
 
     level_no = n;
     floor_no = (uint8_t)(n + 1u);
@@ -118,11 +128,12 @@ static void load_level(uint8_t n)
         else if (ch == 'P') {
             cam_x = (uint16_t)(((uint16_t)(i & 31u) << 8) + 128u);
             cam_y = (uint16_t)(((uint16_t)(i >> 5) << 8) + 128u);
-        } else if (ch == 'K') {
+        } else if (ch == 'K' || ch == 'H') {
             if (item_n < 8u) {
                 item_x[item_n] = (uint8_t)(i & 31u);
                 item_y[item_n] = (uint8_t)(i >> 5);
                 item_taken[item_n] = 0u;
+                item_kind[item_n] = (ch == 'H') ? 1u : 0u;
                 item_n++;
             }
         } else if (ch == 'S') {
@@ -133,6 +144,8 @@ static void load_level(uint8_t n)
                 ex[ne] = (uint16_t)(((uint16_t)(i & 31u) << 8) + 128u);
                 ey[ne] = (uint16_t)(((uint16_t)(i >> 5) << 8) + 128u);
                 ealive[ne] = 1u;
+                ehp[ne] = (n >= 2u) ? 2u : 1u;   /* floors 3-4: two hits */
+                ehit[ne] = 0u;
                 ne++;
             }
         }
@@ -209,9 +222,15 @@ static void post_move(void)
         if (!item_taken[i]) {
             if (item_x[i] == cx) {
                 if (item_y[i] == cy) {
-                    item_taken[i] = 1u;
-                    keys++;
-                    sfx_play(SFX_KEY);
+                    if (item_kind[i] == 0u) {
+                        item_taken[i] = 1u;
+                        keys++;
+                        sfx_play(SFX_KEY);
+                    } else if (hp < HUD_MAX_HP) {   /* health: left lying if full */
+                        item_taken[i] = 1u;
+                        hp++;
+                        sfx_play(SFX_KEY);
+                    }
                 }
             }
         }
@@ -277,7 +296,8 @@ static void enemy_tick(void)
         dy = (int16_t)(cam_y - ey[i]);
         adx = dx < 0 ? (int16_t)-dx : dx;
         ady = dy < 0 ? (int16_t)-dy : dy;
-        ai_step(i);                                /* follow corridors toward the player */
+        if (ehit[i]) ehit[i]--;                    /* stunned while flashing */
+        else ai_step(i);                           /* follow corridors toward the player */
         if (adx < 200 && ady < 200 && dmg_cd == 0u) {
             if (hp) hp--;
             dmg_cd = 60u;
@@ -296,6 +316,7 @@ static void enemy_tick(void)
 /* Item sprites (8x16, OBP1 so colour 3 shows white): key, stairs arrow. */
 #define SPR_KEY    224u
 #define SPR_STAIRS 226u
+#define SPR_HEALTH 154u                 /* after the gun tiles */
 #define MAX_SPR    40u
 const uint8_t item_tiles[4 * 16] = {
     /* 224 key top: empty */
@@ -306,6 +327,13 @@ const uint8_t item_tiles[4 * 16] = {
     0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18,
     /* 227 stairs bottom: arrow head */
     0x18,0x18, 0x18,0x18, 0xFF,0xFF, 0x7E,0x7E, 0x3C,0x3C, 0x18,0x18, 0,0, 0,0,
+};
+
+const uint8_t health_tiles[2 * 16] = {
+    /* 154 top: empty */
+    0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
+    /* 155 bottom: heart */
+    0,0, 0x6C,0x6C, 0xFE,0xFE, 0xFE,0xFE, 0x7C,0x7C, 0x38,0x38, 0x10,0x10, 0,0,
 };
 
 /* Project a world point (8.8) with the current camera. Returns 1 when it is
@@ -374,42 +402,50 @@ static void shoot(void)
         if (p_fwd < best_fwd) { best_fwd = p_fwd; best = i; }
     }
     if (best != 0xFFu) {
-        ealive[best] = 0u;
-        kills++;
-        sfx_play(SFX_KILL);
+        ehp[best]--;
+        if (ehp[best] == 0u) {
+            ealive[best] = 0u;
+            kills++;
+            sfx_play(SFX_KILL);
+        } else {
+            ehit[best] = 3u;             /* 3 AI ticks: flash white, stunned */
+            sfx_play(SFX_HIT);
+        }
     }
 }
 
 /* Billboards for the camera the view was just rendered from. */
 static void sprite_update(void)
 {
-    uint8_t si = GUN_SPRITES, drawn = 0u, i, x, top;   /* 0.. = gun */
+    uint8_t si = GUN_SPRITES, drawn = 0u, i, x, top, pal;   /* 0.. = gun */
 
     for (i = 0u; i < NENEMY; i++) {
         if (drawn >= 3u) break;
         if (!ealive[i]) continue;
         if (!project(ex[i], ey[i])) continue;
         x = p_x;
+        pal = 0u;
+        if (ehit[i]) pal = S_PALETTE;
         /* OAM coords: screen + (8, 16) */
         switch (enemy_tier(p_fwd)) {
         case 0u:
             top = p_foot;
-            set_sprite_tile(si, 206u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x + 4u), top); si++;
+            set_sprite_tile(si, 206u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 4u), top); si++;
             break;
         case 1u:
             top = p_foot;
-            set_sprite_tile(si, 208u); set_sprite_prop(si, 0u); move_sprite(si, x, top); si++;
-            set_sprite_tile(si, 210u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x + 8u), top); si++;
+            set_sprite_tile(si, 208u); set_sprite_prop(si, pal); move_sprite(si, x, top); si++;
+            set_sprite_tile(si, 210u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 8u), top); si++;
             break;
         default:
             top = (uint8_t)(p_foot - 16u);
-            set_sprite_tile(si, 212u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x - 4u), top); si++;
-            set_sprite_tile(si, 214u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x + 4u), top); si++;
-            set_sprite_tile(si, 216u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x + 12u), top); si++;
+            set_sprite_tile(si, 212u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x - 4u), top); si++;
+            set_sprite_tile(si, 214u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 4u), top); si++;
+            set_sprite_tile(si, 216u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 12u), top); si++;
             top = (uint8_t)(top + 16u);
-            set_sprite_tile(si, 218u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x - 4u), top); si++;
-            set_sprite_tile(si, 220u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x + 4u), top); si++;
-            set_sprite_tile(si, 222u); set_sprite_prop(si, 0u); move_sprite(si, (uint8_t)(x + 12u), top); si++;
+            set_sprite_tile(si, 218u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x - 4u), top); si++;
+            set_sprite_tile(si, 220u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 4u), top); si++;
+            set_sprite_tile(si, 222u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 12u), top); si++;
             break;
         }
         drawn++;
@@ -419,7 +455,9 @@ static void sprite_update(void)
         if (item_taken[i]) continue;
         if (si >= MAX_SPR) break;
         if (!project((uint16_t)((item_x[i] << 8) + 128u), (uint16_t)((item_y[i] << 8) + 128u))) continue;
-        set_sprite_tile(si, SPR_KEY); set_sprite_prop(si, S_PALETTE);
+        if (item_kind[i]) set_sprite_tile(si, SPR_HEALTH);
+        else              set_sprite_tile(si, SPR_KEY);
+        set_sprite_prop(si, S_PALETTE);
         move_sprite(si, (uint8_t)(p_x + 4u), p_foot); si++;
     }
     if (si < MAX_SPR) {
@@ -458,6 +496,7 @@ static void init_enemies(void)
 {
     set_sprite_data(206u, 18u, enemy_tiles);
     set_sprite_data(SPR_KEY, 4u, item_tiles);
+    set_sprite_data(SPR_HEALTH, 2u, health_tiles);
     set_sprite_data(SPR_ARROW, 16u, arrow_tiles);
     gun_init();
     OBP0_REG = 0xE4u;
@@ -714,7 +753,7 @@ static void init_screen(void)
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = glyph('A');              /* build marker */
+    row[10] = glyph('D');              /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
@@ -748,18 +787,13 @@ void main(void)
     init_screen();
     sfx_init();
     init_hud();
-    load_level(0u);
     init_enemies();
-
-    render_view();
-    r_dst = 0x8000u;                     /* LCD off: copy runs flat out */
-    copy_vbuf();
-    sprite_update();
-    gun_draw(0u, 0u, 0u);
     add_VBL(vbl_handler);
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
     text_screen("DUNGEON", "ESCAPE 4 FLOORS", "");
+    initrand((uint16_t)(((uint16_t)DIV_REG << 8) | vbl_count));   /* Start timing = seed */
+    load_level(0u);
     last_vbl = vbl_count;
 
     while (1) {
