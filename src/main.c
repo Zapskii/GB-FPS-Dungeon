@@ -307,11 +307,6 @@ static void handle_input(void)
 }
 
 
-static uint16_t div16_8(uint16_t n, uint8_t d)
-{
-    return (uint16_t)(n / d);            /* SDCC's asm divide beats a C loop */
-}
-
 static void enemy_tick(void)
 {
     ai_update();
@@ -369,10 +364,24 @@ const uint8_t health_tiles[2 * 16] = {
 static int16_t p_fwd;
 static uint8_t p_x, p_foot;
 
+uint8_t udiv8(uint16_t n, uint8_t d);   /* src/math.s: n/d, (n>>8) < d */
+int16_t smul8(int16_t r, int8_t c);     /* src/math.s: |r| <= 255 */
+
+/* foot_tab[k] = min(HORIZON + 256/k, VIEW_Y0 + 64), k = fwd >> 5 in 3..80 */
+static const uint8_t foot_tab[81] = {
+    96u, 96u, 96u, 96u, 96u, 96u, 96u, 96u, 96u, 92u, 89u, 87u, 85u, 83u, 82u, 81u,
+    80u, 79u, 78u, 77u, 76u, 76u, 75u, 75u, 74u, 74u, 73u, 73u, 73u, 72u, 72u, 72u,
+    72u, 71u, 71u, 71u, 71u, 70u, 70u, 70u, 70u, 70u, 70u, 69u, 69u, 69u, 69u, 69u,
+    69u, 69u, 69u, 69u, 68u, 68u, 68u, 68u, 68u, 68u, 68u, 68u, 68u, 68u, 68u, 68u,
+    68u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u,
+    67u
+};
+
 static uint8_t project(uint16_t wx, uint16_t wy)
 {
     int16_t rx, ry, cs, sn, lat;
-    uint16_t n, off, foot;
+    uint16_t n;
+    uint8_t off, k;
 
     rx = (int16_t)wx - (int16_t)cam_x;
     ry = (int16_t)wy - (int16_t)cam_y;
@@ -385,22 +394,21 @@ static uint8_t project(uint16_t wx, uint16_t wy)
     ry >>= 4;
     cs = cos8[cam_a];
     sn = sin8[cam_a];
-    p_fwd = (int16_t)((rx * cs + ry * sn) >> 3);
+    p_fwd = (int16_t)((smul8(rx, (int8_t)cs) + smul8(ry, (int8_t)sn)) >> 3);
     if (p_fwd < 96) return 0u;
     if (p_fwd > 2560) return 0u;
-    lat = (int16_t)((ry * cs - rx * sn) >> 3);
+    lat = (int16_t)((smul8(ry, (int8_t)cs) - smul8(rx, (int8_t)sn)) >> 3);
     if (lat < 0) n = (uint16_t)-lat;
     else         n = (uint16_t)lat;
     if (n >= (uint16_t)p_fwd) return 0u;            /* outside the FOV */
-    off = div16_8((uint16_t)(n << 2), (uint8_t)(p_fwd >> 4));   /* 64*lat/fwd */
+    off = udiv8((uint16_t)(n << 2), (uint8_t)(p_fwd >> 4));     /* 64*lat/fwd */
     if (off > 60u) return 0u;
     if (lat < 0) p_x = (uint8_t)(80u - off);
     else         p_x = (uint8_t)(80u + off);
-    if (r_zb[(uint8_t)(p_x - VIEW_X0) >> 1] < (uint8_t)(p_fwd >> 5)) return 0u;
+    k = (uint8_t)(p_fwd >> 5);
+    if (r_zb[(uint8_t)(p_x - VIEW_X0) >> 1] < k) return 0u;
     /* floor line: horizon + 32 px * (1 cell / fwd) */
-    foot = (uint16_t)HORIZON + div16_8(256u, (uint8_t)(p_fwd >> 5));
-    if (foot > VIEW_Y0 + 64u) foot = VIEW_Y0 + 64u;
-    p_foot = (uint8_t)foot;
+    p_foot = foot_tab[k];
     return 1u;
 }
 
