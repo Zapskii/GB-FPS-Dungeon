@@ -210,10 +210,12 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   per image. Profile: 64 × `cast_ray` ≈ 3.3k T each ≈ 3 frames (DDA steps
   ~1.8k, side-distance multiplies ~1.5k); copy ≈ 2 frames (near its STAT-
   polled limit, VBlank-only bursts would gain ~3%); fill + C ≈ 1.5 frames.
-  Build D adds adaptive casting (fewer rays) but its gain is not measured
-  yet (gearboy still showed 07 in one open-room view; mazes are random now,
-  so profile `cast_ray` call counts per image). Next lever: a
-  sign-specialised DDA loop.
+  Adaptive casting (build D), A/B in gearboy with a fixed seed and the
+  same start view, images per 4 s: all 64 rays 26 (6.5 fps), adaptive 29
+  (7.25 fps), +12%. A profiler sample showed ~1/3 of columns interpolated
+  (34 casts vs 16 averaged). Next lever: a sign-specialised DDA loop
+  (`cast_ray` is ~3.2–3.9k T per ray, half of it the side-distance
+  multiplies).
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Builds 5–D are not yet checked on hardware: effects were tuned without
