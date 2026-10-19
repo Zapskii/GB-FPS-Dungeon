@@ -224,9 +224,15 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   write_memory once in game, then read `prof_acc[]` = scanlines/stage):
   copy 2.28 frames, rays + colour + mortar 2.10, fill 1.87, sprite_update
   0.49, logic 0.32, seen[] 0.15, rest 0.14; total 7.34. See PLAN.md.
+- Build F (PLAN.md wave 1): generated ceiling/floor writers (fill -9.8k T
+  measured), asm udiv8/smul8 + foot_tab in project() (~5.5k T per visible
+  object), BFS rebuild in asm without the 1 KB memset (open-room worst
+  case ~271k -> ~76k T, simulated). Start view still 33 images / 4 s
+  (~0.2 frames saved, under one image); the BFS gain shows as less
+  stutter while enemies re-path, not at the static start view.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Builds 5–E are not yet checked on hardware: effects were tuned without
+- Builds 5–F are not yet checked on hardware: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
 - Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health

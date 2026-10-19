@@ -787,7 +787,7 @@ static void init_screen(void)
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = glyph('E');              /* build marker */
+    row[10] = glyph('F');              /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
