@@ -11,6 +11,11 @@ LCC    := /opt/gbdk/bin/lcc
 # -Wm-yn : ROM title, -Wl-m/-Wl-j : link map + NoICE symbols (debugging)
 CFLAGS = -Wm-yn"FPSDUNGEON" -Wl-m -Wl-j
 
+# make clean && make PROFILE=1 : stage profiler (src/main.c PROF), fixed seed
+ifdef PROFILE
+CFLAGS += -DPROFILE
+endif
+
 $(ROM): $(SRCS) $(DEPS)
 	$(RUN) $(LCC) $(CFLAGS) -o $@ $(SRCS)
 

@@ -26,6 +26,8 @@ static void ai_build(uint16_t s)
     uint8_t head, tail, d, k;
     uint16_t c, n;
 
+    PROF_BFS;
+
     memset(ai_dist, AI_FAR, sizeof(ai_dist));
     ai_dist[s] = 0u;
     ai_q[0] = s;

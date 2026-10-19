@@ -102,6 +102,32 @@ static uint8_t item_x[8], item_y[8], item_taken[8], item_kind[8];   /* kind: 0 k
 static uint8_t ehp[NENEMY], ehit[NENEMY];   /* enemy hits left, hit-flash ticks */
 
 
+#ifdef PROFILE
+/* make PROFILE=1: per-stage scanlines (x456 = T) over the first PROF_N
+ * images after prof_imgs is zeroed; read prof_acc[7] with read_memory.
+ * Stages: 0 logic, 1 render_asm, 2 seen[], 3 flip wait, 4 copy,
+ * 5 sprite_update, 6 gun + rest. Fixed seed so runs repeat. */
+#define PROF_N 64u
+uint32_t prof_acc[7];
+uint8_t prof_imgs, prof_bfs;
+static uint8_t prof_v, prof_l;
+static void prof_mark(uint8_t s)
+{
+    uint8_t v, l;
+    do { v = vbl_count; l = LY_REG; } while (v != vbl_count);
+    l = (l >= 144u) ? (uint8_t)(l - 144u) : (uint8_t)(l + 10u);   /* lines since VBL IRQ */
+    if (prof_imgs < PROF_N)
+        prof_acc[s] += (uint16_t)((int16_t)((uint8_t)(v - prof_v) * 154u) + l - prof_l);
+    prof_v = v;
+    prof_l = l;
+}
+#define PROF(s) prof_mark(s)
+#define PROF_BFS prof_bfs++
+#else
+#define PROF(s)
+#define PROF_BFS
+#endif
+
 static uint8_t blocked(uint16_t x, uint16_t y);
 #include "ai.h"                         /* needs imap, cam, ex/ey, blocked() */
 
@@ -777,7 +803,9 @@ static void render_view(void)
 
     setup_rays();
     render_asm();
+    PROF(1);
     for (k = 0u; k < 64u; k++) seen[(uint16_t)(r_hits[k] - imap)] = 1u;
+    PROF(2);
 }
 
 void main(void)
@@ -792,7 +820,11 @@ void main(void)
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
     text_screen("DUNGEON", "ESCAPE 4 FLOORS", "");
+#ifdef PROFILE
+    initrand(0x1234u);
+#else
     initrand((uint16_t)(((uint16_t)DIV_REG << 8) | vbl_count));   /* Start timing = seed */
+#endif
     load_level(0u);
     last_vbl = vbl_count;
 
@@ -824,14 +856,22 @@ void main(void)
             if ((tick & 3u) == 0u) enemy_tick();
             n--;
         }
+        PROF(0);
 
         render_view();
         while (flip_req) ;               /* last image shown: banks settled */
+        PROF(3);
         r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;   /* hidden bank */
         copy_vbuf();
+        PROF(4);
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
+        PROF(5);
         gun_draw(0u, (uint8_t)(fire_cd > 9u), gun_bob);   /* recoil 5 frames after a shot */
         flip_req = 1u;                   /* VBL ISR flips LCDC.4 with the OAM push */
         images++;                        /* FPS: counted and shown by the VBL ISR */
+        PROF(6);
+#ifdef PROFILE
+        if (prof_imgs < PROF_N) prof_imgs++;
+#endif
     }
 }

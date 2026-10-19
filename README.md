@@ -219,6 +219,11 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   loop per ray quadrant with no sign tests or step counter (~105–130 T
   per step, was ~250). Same A/B: 29 → 33 images per 4 s (7.25 → 8.25
   fps, +14%), image unchanged.
+- Stage profile (build E, `make clean && make PROFILE=1`, fixed seed,
+  start view, 64 images; zero `_prof_acc`..`_prof_imgs` with gearboy
+  write_memory once in game, then read `prof_acc[]` = scanlines/stage):
+  copy 2.28 frames, rays + colour + mortar 2.10, fill 1.87, sprite_update
+  0.49, logic 0.32, seen[] 0.15, rest 0.14; total 7.34. See PLAN.md.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Builds 5–E are not yet checked on hardware: effects were tuned without
