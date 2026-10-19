@@ -1,0 +1,14 @@
+# build outputs
+*.gb
+*.map
+*.noi
+*.sav
+*.ihx
+*.lk
+*.lst
+*.sym
+*.o
+# local
+__pycache__/
+.claude/settings.local.json
+.DS_Store
