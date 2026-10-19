@@ -53,7 +53,7 @@ const uint8_t tiles[2][16] = {
      0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,0x00},   /* T_WHITE */
 };
 
-extern volatile uint8_t vbl_count, flash_n, flash_pal;
+extern volatile uint8_t vbl_count, flash_n, flash_pal, flip_req, images;
 void vbl_handler(void);
 void render_asm(void);
 void copy_vbuf(void);
@@ -82,6 +82,7 @@ static uint8_t hp = HUD_MAX_HP, keys = 0u, floor_no = 1u;
 static uint8_t kills = 0u, sec_frames = 0u;   /* run stats for the win screen */
 static uint16_t secs = 0u;
 static void win_screen(void);
+static void game_over(void);
 static uint8_t hud_last_floor = 0xFFu;
 
 #define WM(r,c) (*(uint8_t *)(0x9C00u + (r) * 32u + (c)))
@@ -263,14 +264,7 @@ static void handle_input(void)
 
 static uint16_t div16_8(uint16_t n, uint8_t d)
 {
-    uint16_t q = 0u, r = 0u;
-    for (uint8_t b = 0; b < 16u; b++) {
-        r = (uint16_t)((r << 1) | (n >> 15));
-        n <<= 1;
-        q <<= 1;
-        if (r >= d) { r = (uint16_t)(r - d); q |= 1u; }
-    }
-    return q;
+    return (uint16_t)(n / d);            /* SDCC's asm divide beats a C loop */
 }
 
 static void enemy_tick(void)
@@ -290,8 +284,8 @@ static void enemy_tick(void)
             flash_pal = 0x1Bu; flash_n = 6u;          /* hurt: invert */
             sfx_play(SFX_HURT);
             if (hp == 0u) {
-                hp = HUD_MAX_HP;
-                load_level(level_no);
+                game_over();
+                load_level(0u);
             }
         }
     }
@@ -324,22 +318,23 @@ static uint8_t p_x, p_foot;
 static uint8_t project(uint16_t wx, uint16_t wy)
 {
     int16_t rx, ry, cs, sn, lat;
-    int32_t f32;
     uint16_t n, off, foot;
 
     rx = (int16_t)wx - (int16_t)cam_x;
     ry = (int16_t)wy - (int16_t)cam_y;
-    if (rx > 3000) return 0u;
-    if (rx < -3000) return 0u;
-    if (ry > 3000) return 0u;
-    if (ry < -3000) return 0u;
+    if (rx > 2560) return 0u;
+    if (rx < -2560) return 0u;
+    if (ry > 2560) return 0u;
+    if (ry < -2560) return 0u;
+    /* 1/16-cell precision in int16: |(r>>4)| <= 226 along any axis, *127 fits */
+    rx >>= 4;
+    ry >>= 4;
     cs = cos8[cam_a];
     sn = sin8[cam_a];
-    f32 = (((int32_t)rx * cs) + ((int32_t)ry * sn)) >> 7;
-    if (f32 < 96) return 0u;
-    if (f32 > 2560) return 0u;
-    p_fwd = (int16_t)f32;
-    lat = (int16_t)((((int32_t)(-rx) * sn) + ((int32_t)ry * cs)) >> 7);
+    p_fwd = (int16_t)((rx * cs + ry * sn) >> 3);
+    if (p_fwd < 96) return 0u;
+    if (p_fwd > 2560) return 0u;
+    lat = (int16_t)((ry * cs - rx * sn) >> 3);
     if (lat < 0) n = (uint16_t)-lat;
     else         n = (uint16_t)lat;
     if (n >= (uint16_t)p_fwd) return 0u;            /* outside the FOV */
@@ -510,6 +505,7 @@ static void show_map(void)
     uint8_t si;
 
     draw_map();
+    while (flip_req) ;                   /* hidden bank settled */
     r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;
     copy_vbuf();
     /* arrow centre is pixel (3,3) of its tile; OAM = screen + (8, 16) */
@@ -518,8 +514,8 @@ static void show_map(void)
     move_sprite(0u, (uint8_t)(VIEW_X0 + MAP_X0 + (cam_x >> 7) - 3u + 8u),
                     (uint8_t)(VIEW_Y0 + (cam_y >> 7) - 3u + 16u));
     for (si = 1u; si < MAX_SPR; si++) move_sprite(si, 0u, 0u);
-    wait_vbl_done();
-    LCDC_REG ^= LCDCF_BG8000;
+    flip_req = 1u;
+    while (flip_req) ;
 
     while (joypad() & J_SELECT) wait_vbl_done();
     while (!(joypad() & (J_SELECT | J_START | J_A | J_B))) wait_vbl_done();
@@ -547,7 +543,7 @@ static void init_hud(void)
 }
 
 /* Called right after wait_vbl_done (still VBlank). */
-static void hud_update(void)
+void hud_update(void)                    /* called from the VBL ISR */
 {
     static const uint8_t cell[4] = {15u, 17u, 19u, 13u};      /* E S W N */
     static const uint8_t norm[4] = {HUD_E, HUD_S, HUD_W, HUD_N};
@@ -576,10 +572,10 @@ static void hud_update(void)
 }
 
 
-/* Extra letters for the win screen, HUD style (3x5, black on white).
+/* Extra letters for the title/end screens, HUD style (3x5, black on white).
  * O reuses digit 0; E S N W K F come from the HUD set. */
 #define FONT_BASE 184u
-const uint8_t font_tiles[10 * 16] = {
+const uint8_t font_tiles[13 * 16] = {
     0,0, 0,0, 40,40, 40,40, 16,16, 16,16, 16,16, 0,0,   /* Y */
     0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 56,56, 0,0,   /* U */
     0,0, 0,0, 56,56, 32,32, 32,32, 32,32, 56,56, 0,0,   /* C */
@@ -590,17 +586,20 @@ const uint8_t font_tiles[10 * 16] = {
     0,0, 0,0, 56,56, 16,16, 16,16, 16,16, 56,56, 0,0,   /* I */
     0,0, 0,0, 32,32, 32,32, 32,32, 32,32, 56,56, 0,0,   /* L */
     0,0, 0,0, 56,56, 40,40, 48,48, 40,40, 40,40, 0,0,   /* R */
+    0,0, 0,0, 56,56, 32,32, 40,40, 40,40, 56,56, 0,0,   /* G */
+    0,0, 0,0, 68,68, 108,108, 84,84, 68,68, 68,68, 0,0, /* M (5 wide, else it reads as N) */
+    0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 16,16, 0,0,   /* V */
 };
 
 static uint8_t glyph(char ch)
 {
-    static const char extra[] = "YUCAPDTILR";
+    static const char extra[] = "YUCAPDTILRGMV";
     static const char hud[] = "NESWKF";
     uint8_t i;
 
     if (ch >= '0' && ch <= '9') return HUD_DIGIT(ch - '0');
     if (ch == 'O') return HUD_DIGIT(0);
-    for (i = 0u; i < 10u; i++) if (extra[i] == ch) return (uint8_t)(FONT_BASE + i);
+    for (i = 0u; i < 13u; i++) if (extra[i] == ch) return (uint8_t)(FONT_BASE + i);
     for (i = 0u; i < 6u; i++) if (hud[i] == ch) return (uint8_t)(HUD_N + i);
     return T_WHITE;
 }
@@ -645,20 +644,18 @@ static void label_num(char *buf, const char *label, uint16_t v)
     buf[i] = 0;
 }
 
-/* Cleared floor 4: show stats until Start, then a fresh run from floor 1. */
-static void win_screen(void)
+/* Full-screen text (3 lines + PRESS START) until Start is pressed, then
+ * the normal frame comes back. */
+static void text_screen(const char *l1, const char *l2, const char *l3)
 {
-    char line[12];
     uint8_t i;
 
     for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
     DISPLAY_OFF;
     for (i = 0u; i < 18u; i++) banner(i, "");
-    banner(4u, "YOU ESCAPED");
-    label_num(line, "KILLS", kills);
-    banner(7u, line);
-    label_num(line, "SECS", secs);
-    banner(9u, line);
+    banner(4u, l1);
+    banner(7u, l2);
+    banner(9u, l3);
     banner(12u, "PRESS START");
     DISPLAY_ON;
 
@@ -669,9 +666,35 @@ static void win_screen(void)
     DISPLAY_OFF;
     draw_frame();
     DISPLAY_ON;
+}
+
+static void new_run(void)
+{
     hp = HUD_MAX_HP;
     kills = 0u;
     secs = 0u;
+}
+
+/* Cleared floor 4: stats, then a fresh run (caller loads floor 1). */
+static void win_screen(void)
+{
+    char a[12], b[12];
+
+    label_num(a, "KILLS", kills);
+    label_num(b, "SECS", secs);
+    text_screen("YOU ESCAPED", a, b);
+    new_run();
+}
+
+/* Out of hearts: stats, then a fresh run (caller loads floor 1). */
+static void game_over(void)
+{
+    char a[12], b[12];
+
+    label_num(a, "FLOOR", floor_no);
+    label_num(b, "KILLS", kills);
+    text_screen("GAME OVER", a, b);
+    new_run();
 }
 
 static void init_screen(void)
@@ -685,14 +708,13 @@ static void init_screen(void)
     BGP_REG = 0xE4u;
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
-    set_bkg_data(FONT_BASE, 10u, font_tiles);
+    set_bkg_data(FONT_BASE, 13u, font_tiles);
     frame_init();
     draw_frame();
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[0] = T_BLACK;
-    row[10] = HUD_DIGIT(6);              /* build marker */
+    row[10] = glyph('A');              /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
@@ -737,6 +759,7 @@ void main(void)
     add_VBL(vbl_handler);
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
+    text_screen("DUNGEON", "ESCAPE 4 FLOORS", "");
     last_vbl = vbl_count;
 
     while (1) {
@@ -769,12 +792,12 @@ void main(void)
         }
 
         render_view();
+        while (flip_req) ;               /* last image shown: banks settled */
         r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;   /* hidden bank */
         copy_vbuf();
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
         gun_draw(0u, (uint8_t)(fire_cd > 9u), gun_bob);   /* recoil 5 frames after a shot */
-        wait_vbl_done();
-        LCDC_REG ^= LCDCF_BG8000;        /* flip banks with the OAM push */
-        hud_update();
+        flip_req = 1u;                   /* VBL ISR flips LCDC.4 with the OAM push */
+        images++;                        /* FPS: counted and shown by the VBL ISR */
     }
 }

@@ -8,7 +8,7 @@ riveted frame around the view, HUD compass and hearts. The
 3D view is a real 128×64 bitmap (64 rays, 2-px columns) drawn into tile
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
-Build marker: the digit **6** in the HUD's bottom row identifies the
+Build marker: the character **A** in the HUD (after 1–9)'s bottom row identifies the
 current build; it changes between hand-offs.
 
 ## Build
@@ -33,8 +33,11 @@ Keys show as white key sprites and the stairs as a white down-arrow. Walk
 over a key to take it, touch a **D** door (dark grey) with a key to open it,
 walk to the arrow to descend. Enemies chase and hurt on contact (screen
 flashes inverted); one shot kills (screen flashes light); at 0 hearts the
-level restarts. Clear floor 4 to escape: a win screen shows kills and
-seconds played (map time excluded), and Start begins a fresh run.
+run ends on a GAME OVER screen (floor reached, kills). Clear floor 4 to
+escape: a win screen shows kills and seconds played (map time excluded).
+Start on either screen begins a fresh run; a title screen opens the game.
+HUD row 1, right: frames per second (views flipped per 60 VBlanks,
+counted and written by the VBL ISR every second).
 
 ## Architecture
 
@@ -46,10 +49,12 @@ with 0 they read 0x9000–0x97FF (bank B); indices 128+ are shared by both
 modes, so the border, HUD (base 160) and sprites (base 206) live there.
 
 Per image the main loop: runs game logic once per elapsed VBlank (60 Hz
-regardless of render rate), renders into `vbuf` (WRAM, 2 KB, laid out as
-the 128 tiles), `copy_vbuf()` streams it into the hidden bank, updates
-shadow OAM, then on the next VBlank toggles LCDC.4 (same frame as the OAM
-push) and updates the HUD.
+regardless of render rate, capped at 4 catch-up frames), renders into
+`vbuf` (WRAM, 2 KB, laid out as the 128 tiles), waits for any pending flip,
+`copy_vbuf()` streams it into the hidden bank, updates shadow OAM and sets
+`flip_req`. The VBL ISR toggles LCDC.4 in the same VBlank as the OAM push
+and also runs `hud_update()`, so the main loop never idles for VBlank. The
+ISR must stay well inside VBlank (copy_vbuf's safety relies on it).
 
 `copy_vbuf` polls STAT before every 2-byte burst. Once mode 0/1 is seen
 VRAM stays open ≥ 80 T (rest of mode 0 + all of mode 2), and both stores
@@ -145,17 +150,18 @@ a ±2 px sway, recoil shows while `fire_cd > 9`. Billboards start at slot 6.
 Art sources: `tools/gen_gun.py` (ASCII art → `src/gun.h` + preview PNG),
 `tools/gen_frame_tiles.py` and `tools/preview_frame.py` for the frame.
 
-### Win screen
+### Title / game over / win screens
 
-`win_screen()` (display off, BG map rewritten as centred white banners)
-uses the HUD font plus 10 extra 3×5 letters at base 184 (`font_tiles`;
-`glyph()` maps text to tiles, O reuses digit 0, no M). `draw_frame()`
-restores the border and viewport tile map afterwards.
+`text_screen()` (display off, BG map rewritten as centred white banners,
+waits for Start) backs the title, `game_over()` and `win_screen()`. Text
+uses the HUD font plus 13 extra letters at base 184 (`font_tiles`: YUCAPD
+TILR GMV; M is 5 px wide so it doesn't read as N; O reuses digit 0).
+`draw_frame()` restores the border and viewport tile map afterwards.
 
 ### HUD
 
 Window row 0: 5 hearts, `K n`, `F n`, compass `N E S W` with the facing
-cardinal inverted. Row 1: heartbeat and the build-marker digit. Tiles at
+cardinal inverted. Row 1: the build-marker digit and the FPS counter. Tiles at
 base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
 
 ## Milestones (measured with the gearboy profiler/MCP)
@@ -180,8 +186,12 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
 
 ## Constraints & next steps
 
-- Frame rate is not measured yet; the 2 KB polled copy is the main cost
-  (~2 frames). An unpolled burst while LY ≥ 144 would speed it up.
+- Frame rate (build 8, gearboy, long corridor view): ~7 fps ≈ 8.6 frames
+  per image. Profile: 64 × `cast_ray` ≈ 3.3k T each ≈ 3 frames (DDA steps
+  ~1.8k, side-distance multiplies ~1.5k); copy ≈ 2 frames (near its STAT-
+  polled limit, VBlank-only bursts would gain ~3%); fill + C ≈ 1.5 frames.
+  Biggest lever: cast fewer rays (even columns, interpolate odd ones when
+  both neighbours hit the same cell/face), then a sign-specialised DDA loop.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Builds 5–6 are not yet checked on hardware: effects were tuned without
