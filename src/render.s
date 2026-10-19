@@ -16,249 +16,107 @@ FOG_FAR  = 6                    ; cells: wall one full shade darker
 
 
 ; ---------------------------------------------------------------
-; mul8: HL = B * C  via log/antilog (~80 T; ~2% error, fine for 8px
-; bands). Returns 0 if either operand is 0. Clobbers A, HL, DE.
+; Side distances: sd = f * rcp[a] >> 8, f = distance to the first
+; gridline (1/256 cell), a = |ray component|. In the log domain that is
+; one add: antilog[log8[f] + lrc[a] - 16] (~2% error, like the old mul8).
+; log8[f] only depends on the camera and the ray's sign, so render_asm
+; fills r_lf once per image: x+, x-, y+, y-. f = 0 reads as f = 1
+; (log8[0] = 0), 1/256 cell off - invisible.
 ; ---------------------------------------------------------------
-mul8:
-        ld      a, b
-        or      a
-        jr      Z, mul_z
-        ld      a, c
-        or      a
-        jr      Z, mul_z
-        ld      h, #0
-        ld      l, b
-        ld      de, #_log8
+
+; lf_pair: A = camera fraction (lo byte) -> A = log8[256 - lo] (dir +),
+; B = log8[lo] (dir -). Clobbers DE, HL.
+lf_pair:
+        ld      e, a
+        ld      d, #0
+        ld      hl, #_log8
+        add     hl, de
+        ld      b, (hl)
+        ld      a, e
+        cpl
+        inc     a                      ; 256 - lo, Z when lo == 0 (f = 256)
+        jr      Z, 1$
+        ld      e, a
+        ld      hl, #_log8
         add     hl, de
         ld      a, (hl)
-        ld      b, a                   ; B = log b (operand B done)
-        ld      h, #0
-        ld      l, c
-        ld      de, #_log8
+        ret
+1$:     ld      a, #248                ; log8[256]
+        ret
+
+; sd_lu: A = log8[f], C = a -> HL = f * rcp[a] >> 8. Clobbers A, DE.
+sd_lu:
+        ld      hl, #_lrc
+        ld      e, c
+        ld      d, #0
         add     hl, de
-        ld      a, (hl)                ; A = log c
-        add     a, b                   ; 9-bit sum: low + carry
+        add     a, (hl)
         ld      e, a
         ld      a, #0
-        adc     a, #0
-        ld      d, a                   ; DE = sum (0..511)
-        ld      hl, #_antilog
+        adc     a, a
+        ld      d, a                   ; DE = index + 16 (0..481)
+        jr      NZ, 1$
+        ld      a, e
+        cp      #16
+        jr      NC, 1$
+        ld      e, #16                 ; below 1/256 cell: antilog[0]
+1$:     ld      hl, #(_antilog - 32)
         add     hl, de
-        add     hl, de                 ; + 2*sum
+        add     hl, de
         ld      a, (hl+)
         ld      h, (hl)
         ld      l, a
         ret
-mul_z:
-        ld      hl, #0
-        ret
 
-; ---------------------------------------------------------------
-; emit_run: B = count, A = tile, HL = data ptr, DE = 3 (stride)
-; ---------------------------------------------------------------
-
-; ---------------------------------------------------------------
-; sdx = frac * ddx >> 8, split into two fast multiplies
-; (frac == 0 -> 0; frac == 256 -> ddx)
-; ---------------------------------------------------------------
-cr_mulx:
-        ld      a, (_r_frac+1)
-        or      a
-        jr      NZ, cr_mxf
-        ld      a, (_r_frac)
-        or      a
-        jr      Z, cr_mxz
-        ld      a, (_r_ddx+1)
-        ld      c, a
-        ld      a, (_r_frac)
-        ld      b, a
-        call    mul8
-        ld      a, l
-        ld      (_r_sdx), a
-        ld      a, h
-        ld      (_r_sdx+1), a
-        ld      a, (_r_ddx)
-        ld      c, a
-        ld      a, (_r_frac)
-        ld      b, a
-        call    mul8
-        ld      a, h
-        ld      b, a
-        ld      a, (_r_sdx)
-        add     a, b
-        ld      (_r_sdx), a
-        ld      a, (_r_sdx+1)
-        adc     a, #0
-        ld      (_r_sdx+1), a
-        ret
-cr_mxz:
-        xor     a
-        ld      (_r_sdx), a
-        ld      (_r_sdx+1), a
-        ret
-cr_mxf:
-        ld      a, (_r_ddx)
-        ld      (_r_sdx), a
-        ld      a, (_r_ddx+1)
-        ld      (_r_sdx+1), a
-        ret
-
-; ---------------------------------------------------------------
-; sdy = frac * ddy >> 8
-; ---------------------------------------------------------------
-cr_muly:
-        ld      a, (_r_frac+1)
-        or      a
-        jr      NZ, cr_myf
-        ld      a, (_r_frac)
-        or      a
-        jr      Z, cr_myz
-        ld      a, (_r_ddy+1)
-        ld      c, a
-        ld      a, (_r_frac)
-        ld      b, a
-        call    mul8
-        ld      a, l
-        ld      (_r_sdy), a
-        ld      a, h
-        ld      (_r_sdy+1), a
-        ld      a, (_r_ddy)
-        ld      c, a
-        ld      a, (_r_frac)
-        ld      b, a
-        call    mul8
-        ld      a, h
-        ld      b, a
-        ld      a, (_r_sdy)
-        add     a, b
-        ld      (_r_sdy), a
-        ld      a, (_r_sdy+1)
-        adc     a, #0
-        ld      (_r_sdy+1), a
-        ret
-cr_myz:
-        xor     a
-        ld      (_r_sdy), a
-        ld      (_r_sdy+1), a
-        ret
-cr_myf:
-        ld      a, (_r_ddy)
-        ld      (_r_sdy), a
-        ld      a, (_r_ddy+1)
-        ld      (_r_sdy+1), a
-        ret
-
-; ---------------------------------------------------------------
-; cast_ray: A = ray angle index -> _r_dist, _r_wall
-; ---------------------------------------------------------------
 ; ---------------------------------------------------------------
 ; cast_ray: ray (_r_dx, _r_dy) from the camera -> _r_dist (perp, 8.8),
 ; _r_wall, _r_side, _r_hit (map cell address).
 ; ---------------------------------------------------------------
 cast_ray:
-        ; x: adx, sx
+        ; x: C = |dx|, sdx pushed, ddx = rcp[|dx|]
         ld      a, (_r_dx)
-        ld      b, a
-        bit     7, b
-        jr      Z, cr_dxp
-        ld      a, b
-        cpl
-        inc     a
-        ld      (_r_adx), a
-        ld      a, #1
-        ld      (_r_sx), a
-        jr      cr_dxn
-cr_dxp:
-        ld      a, b
-        ld      (_r_adx), a
+        ld      c, a
+        ld      a, (_r_lf)
+        bit     7, c
+        jr      Z, 1$
         xor     a
-        ld      (_r_sx), a
-cr_dxn:
-        ; y
-        ld      a, (_r_dy)
-        ld      b, a
-        bit     7, b
-        jr      Z, cr_dyp
-        ld      a, b
-        cpl
-        inc     a
-        ld      (_r_ady), a
-        ld      a, #1
-        ld      (_r_sy), a
-        jr      cr_dyn
-cr_dyp:
-        ld      a, b
-        ld      (_r_ady), a
-        xor     a
-        ld      (_r_sy), a
-cr_dyn:
-
-        ; ddx = recip8[adx*2]
-        ld      a, (_r_adx)
-        add     a, a
-        ld      e, a
-        ld      d, #0
-        ld      hl, #_rcp
+        sub     c
+        ld      c, a
+        ld      a, (_r_lf+1)
+1$:     call    sd_lu
+        push    hl
+        ld      l, c
+        ld      h, #0
+        add     hl, hl
+        ld      de, #_rcp
         add     hl, de
         ld      a, (hl+)
         ld      (_r_ddx), a
         ld      a, (hl)
         ld      (_r_ddx+1), a
-        ; ddy
-        ld      a, (_r_ady)
-        add     a, a
-        ld      e, a
-        ld      d, #0
-        ld      hl, #_rcp
+        ; y
+        ld      a, (_r_dy)
+        ld      c, a
+        ld      a, (_r_lf+2)
+        bit     7, c
+        jr      Z, 2$
+        xor     a
+        sub     c
+        ld      c, a
+        ld      a, (_r_lf+3)
+2$:     call    sd_lu
+        push    hl
+        ld      l, c
+        ld      h, #0
+        add     hl, hl
+        ld      de, #_rcp
         add     hl, de
         ld      a, (hl+)
         ld      (_r_ddy), a
         ld      a, (hl)
         ld      (_r_ddy+1), a
 
-        ; initial x side distance
-        ld      a, (_r_sx)
-        or      a
-        jr      NZ, cr_sxn
-        ld      a, (_cam_x)
-        ld      b, a
-        xor     a
-        sub     b
-        ld      (_r_frac), a
-        ld      a, #1
-        sbc     a, #0
-        ld      (_r_frac+1), a
-        jr      cr_sxd
-cr_sxn:
-        ld      a, (_cam_x)
-        ld      (_r_frac), a
-        xor     a
-        ld      (_r_frac+1), a
-cr_sxd:
-        call    cr_mulx
-        ; initial y side distance
-        ld      a, (_r_sy)
-        or      a
-        jr      NZ, cr_syn
-        ld      a, (_cam_y)
-        ld      b, a
-        xor     a
-        sub     b
-        ld      (_r_frac), a
-        ld      a, #1
-        sbc     a, #0
-        ld      (_r_frac+1), a
-        jr      cr_syd
-cr_syn:
-        ld      a, (_cam_y)
-        ld      (_r_frac), a
-        xor     a
-        ld      (_r_frac+1), a
-cr_syd:
-        call    cr_muly
-
         ; HL = imap + mapy*32 + mapx
-        ; (done BEFORE loading BC/DE: the address math uses DE as scratch)
         ld      a, (_cam_y+1)
         ld      l, a
         ld      h, #0
@@ -273,136 +131,105 @@ cr_syd:
         add     hl, de
         ld      de, #_imap
         add     hl, de
+        pop     de                     ; DE = sdy
+        pop     bc                     ; BC = sdx
 
-        ; side distances into BC (sdx) and DE (sdy)
-        ld      a, (_r_sdx)
-        ld      c, a
-        ld      a, (_r_sdx+1)
-        ld      b, a
-        ld      a, (_r_sdy)
-        ld      e, a
-        ld      a, (_r_sdy+1)
-        ld      d, a
+        ; one DDA loop per quadrant, so no sign tests per step. No step
+        ; cap: mazegen walls rows/columns 0, 30 and 31, so every ray hits.
+        ld      a, (_r_dy)
+        rlca
+        jr      C, 3$
+        ld      a, (_r_dx)
+        rlca
+        jp      C, dda_mp
+        jp      dda_pp
+3$:     ld      a, (_r_dx)
+        rlca
+        jp      C, dda_mm
+        jp      dda_pm
 
-        xor     a
-        ld      (_r_steps), a
-
-dda_top:
-        ld      a, (_r_steps)
-        inc     a
-        ld      (_r_steps), a
-        cp      #65
-        jp      NC, dda_cap
-        ; if (sdx < sdy) step x else step y
-        ld      a, b
+; DDA xop, ylo, yhi: BC = sdx, DE = sdy, HL = map cell. x step is
+; xop hl, y step adds (yhi:ylo) = +-32 to HL. Exits to dda_hx / dda_hy
+; with A = the cell hit.
+        .macro  DDA xop, ylo, yhi
+1$:     ld      a, b                   ; sdx < sdy ? step x : step y
         cp      d
-        jp      C, dda_x
-        jr      NZ, dda_y
+        jr      C, 3$
+        jr      NZ, 2$
         ld      a, c
         cp      e
-        jp      C, dda_x
-dda_y:
-        ; sdy(DE) += ddy
-        ld      a, (_r_ddy)
+        jr      C, 3$
+2$:     ld      a, (_r_ddy)
         add     a, e
         ld      e, a
         ld      a, (_r_ddy+1)
         adc     a, d
         ld      d, a
-        ld      a, #1
-        ld      (_r_side), a
-        ld      a, (_r_sy)
+        ld      a, l
+        add     a, #ylo
+        ld      l, a
+        ld      a, h
+        adc     a, #yhi
+        ld      h, a
+        ld      a, (hl)
         or      a
-        jr      NZ, dda_ym
-        ld      a, l
-        add     a, #32
-        ld      l, a
-        ld      a, h
-        adc     a, #0
-        ld      h, a
-        jr      dda_look
-dda_ym:
-        ld      a, l
-        sub     #32
-        ld      l, a
-        ld      a, h
-        sbc     a, #0
-        ld      h, a
-        jr      dda_look
-dda_x:
-        ; sdx(BC) += ddx
-        ld      a, (_r_ddx)
+        jr      Z, 1$
+        jp      dda_hy
+3$:     ld      a, (_r_ddx)
         add     a, c
         ld      c, a
         ld      a, (_r_ddx+1)
         adc     a, b
         ld      b, a
-        xor     a
-        ld      (_r_side), a
-        ld      a, (_r_sx)
-        or      a
-        jr      NZ, dda_xm
-        inc     hl
-        jr      dda_look
-dda_xm:
-        dec     hl
-dda_look:
+        xop     hl
         ld      a, (hl)
         or      a
-        jr      NZ, dda_hit
-        jp      dda_top
-dda_cap:
-        ld      a, (hl)
-        or      a
-        jr      NZ, dda_hit
-        ld      a, #1
-dda_hit:
+        jr      Z, 1$
+        jp      dda_hx
+        .endm
+
+dda_pp: DDA     inc, 32, 0
+dda_mp: DDA     dec, 32, 0
+dda_pm: DDA     inc, 0xE0, 0xFF
+dda_mm: DDA     dec, 0xE0, 0xFF
+
+dda_hx:
         ld      (_r_wall), a
         ld      a, l
         ld      (_r_hit), a
         ld      a, h
         ld      (_r_hit+1), a
-        ld      a, (_r_side)
-        or      a
-        jr      NZ, dda_dy
-        ; dist = sdx(BC) - ddx
-        ld      a, c
-        ld      (_r_dist), a
-        ld      a, b
-        ld      (_r_dist+1), a
-        ld      a, (_r_dist)
-        ld      b, a
+        xor     a
+        ld      (_r_side), a
+        ; dist = sdx - ddx
         ld      a, (_r_ddx)
-        ld      c, a
-        ld      a, b
-        sub     c
+        ld      e, a
+        ld      a, c
+        sub     e
         ld      (_r_dist), a
-        ld      a, (_r_dist+1)
-        ld      b, a
         ld      a, (_r_ddx+1)
-        ld      c, a
+        ld      e, a
         ld      a, b
-        sbc     a, c
+        sbc     a, e
         ld      (_r_dist+1), a
         ret
-dda_dy:
-        ; dist = sdy(DE) - ddy
-        ld      a, e
-        ld      (_r_dist), a
-        ld      a, d
-        ld      (_r_dist+1), a
-        ld      a, (_r_dist)
-        ld      b, a
+dda_hy:
+        ld      (_r_wall), a
+        ld      a, l
+        ld      (_r_hit), a
+        ld      a, h
+        ld      (_r_hit+1), a
+        ld      a, #1
+        ld      (_r_side), a
+        ; dist = sdy - ddy
         ld      a, (_r_ddy)
         ld      c, a
-        ld      a, b
+        ld      a, e
         sub     c
         ld      (_r_dist), a
-        ld      a, (_r_dist+1)
-        ld      b, a
         ld      a, (_r_ddy+1)
         ld      c, a
-        ld      a, b
+        ld      a, d
         sbc     a, c
         ld      (_r_dist+1), a
         ret
@@ -420,6 +247,17 @@ dda_dy:
 ; new map cell or face draws its edge one shade darker (2, door 3).
 ; ---------------------------------------------------------------
 _render_asm::
+        ; per-image log8 of the camera's gridline fractions (see sd_lu)
+        ld      a, (_cam_x)
+        call    lf_pair
+        ld      (_r_lf), a
+        ld      a, b
+        ld      (_r_lf+1), a
+        ld      a, (_cam_y)
+        call    lf_pair
+        ld      (_r_lf+2), a
+        ld      a, b
+        ld      (_r_lf+3), a
         ; odd-pass start = rd0 + step, both passes advance by 2*step
         ld      a, (_r_stx)
         ld      l, a

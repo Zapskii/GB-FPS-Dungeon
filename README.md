@@ -213,12 +213,15 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   Adaptive casting (build D), A/B in gearboy with a fixed seed and the
   same start view, images per 4 s: all 64 rays 26 (6.5 fps), adaptive 29
   (7.25 fps), +12%. A profiler sample showed ~1/3 of columns interpolated
-  (34 casts vs 16 averaged). Next lever: a sign-specialised DDA loop
-  (`cast_ray` is ~3.2–3.9k T per ray, half of it the side-distance
-  multiplies).
+  (34 casts vs 16 averaged). Build E: side distances as one log-domain
+  lookup (`sd_lu`, log8 of the camera fraction once per image, `lrc[]`
+  table; `tools/check_sd.py` checks it, worst error 3.7%) and one DDA
+  loop per ray quadrant with no sign tests or step counter (~105–130 T
+  per step, was ~250). Same A/B: 29 → 33 images per 4 s (7.25 → 8.25
+  fps, +14%), image unchanged.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Builds 5–D are not yet checked on hardware: effects were tuned without
+- Builds 5–E are not yet checked on hardware: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
 - Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health

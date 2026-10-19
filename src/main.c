@@ -62,8 +62,8 @@ void render_asm(void);
 void copy_vbuf(void);
 
 /* Scratch read/written by render.s — keep names in sync with the asm. */
-uint8_t r_dx, r_dy, r_adx, r_ady, r_sx, r_sy, r_side, r_steps, r_wall;
-uint8_t r_ddx[2], r_ddy[2], r_sdx[2], r_sdy[2], r_frac[2], r_dist[2];
+uint8_t r_dx, r_dy, r_side, r_wall;
+uint8_t r_ddx[2], r_ddy[2], r_dist[2], r_lf[4];
 uint8_t r_hit[2], r_k;
 int16_t r_rdx, r_rdy, r_stx, r_sty;   /* ray dir accumulators, 8.8 */
 uint8_t r_top[64], r_bot[64], r_clr[64], r_zb[64];
@@ -753,7 +753,7 @@ static void init_screen(void)
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = glyph('D');              /* build marker */
+    row[10] = glyph('E');              /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
