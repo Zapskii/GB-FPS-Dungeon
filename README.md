@@ -3,12 +3,13 @@
 A first-person Wolfenstein-style raycaster for the original Game Boy (DMG),
 built in GBDK-2020 with hand-written assembly for the renderer. Four
 randomly generated corridor-maze floors (one-way stairs down), keys and
-doors, two pathfinding billboard enemy types (grunts and bats), health,
-gold and map-scroll pickups that scale with distance, shooting with an
-on-screen gun that lowers over items, an automap, sound effects and a
-~64 s background music loop (B on the map mutes it), title /
-game-over / win screens, a riveted frame around the view, HUD compass,
-hearts and gold. The
+doors, three pathfinding billboard enemy types (grunts, bats, brutes),
+health, gold and map-scroll pickups that scale with distance, shooting
+with an on-screen gun that lowers over items, an automap, three
+battery-backed save slots, sound effects and a ~64 s background music
+loop (B on the map mutes it), a title screen over a self-walking 3D maze,
+a glide-in intro on each floor, game-over / win screens, a riveted frame
+around the view, HUD compass, hearts and gold. The
 3D view is a real 128×64 bitmap (64 rays, 2-px columns) drawn into tile
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
@@ -124,7 +125,6 @@ mode-3 blocking; gearboy does not.
 - `=` walls: after the fill, three dark mortar rows at 1/4, 1/2 and 3/4 of
   the projected wall height (walls ≥ 8 px), so they read as brick and
   converge with perspective; `#` walls stay plain.
-- `src/textures.h` is no longer used (it was the old tile-strip texture set).
 
 ### Enemies and items (`src/ai.h` movement, `src/sprites.h` art)
 
@@ -290,13 +290,16 @@ tiles).
 | Display polish | frame, gun sprite, ceiling/floor gradients, wall fog (build 6) |
 | Screens + FPS | title/game-over screens, FPS counter, VBL-ISR flip (builds 7–A) |
 | Random mazes | on-cart generator per run, health pickups, 2-hit enemies (build C) |
-| Speed | adaptive rays, log side distances, PLAN.md waves 1–4: 6.5 → ~10.75 fps (builds D–I) |
+| Speed | adaptive rays, log side distances, speed waves 1–4: 6.5 → ~10.75 fps (builds D–I) |
 | Variety | bats, gold and map items, item size tiers, sprite generator (build L) |
 | Sprite polish | gun lowers (M) then slides (P) over items; nearest-first, line-budgeted billboards (M) |
 | Floor banner | "FLOOR n" across the view for 1.5 s on arrival (build R) |
 | Brute | third enemy type: grunt art one size up, half speed, 3 HP, floors 3–4 (build T) |
 | Music | ~64 s tracker-style loop on ch2/ch3 from the VBL ISR, B on the map toggles it (build U) |
 | Speed 2 | halt-synced HBlank copy, generated wall cores, aligned ray tables, asm project(): ~10.75 → ~14.8 fps (build V) |
+| Speed 3 | asm draw_art and ai_step, copy handover in mode 0, odd-column walk: ~15 fps (build Y) |
+| Saves | battery SRAM (MBC1), one slot (25), then 3 slots with a picker (28) |
+| Title | BY ZAPSKI (26), attract mode on a live view and floor intros (27) |
 
 ## Constraints & next steps
 
@@ -317,21 +320,21 @@ tiles).
   start view, 64 images; zero `_prof_acc`..`_prof_imgs` with gearboy
   write_memory once in game, then read `prof_acc[]` = scanlines/stage):
   copy 2.28 frames, rays + colour + mortar 2.10, fill 1.87, sprite_update
-  0.49, logic 0.32, seen[] 0.15, rest 0.14; total 7.34. See PLAN.md.
-- Build F (PLAN.md wave 1): generated ceiling/floor writers (fill -9.8k T
+  0.49, logic 0.32, seen[] 0.15, rest 0.14; total 7.34.
+- Build F (speed wave 1): generated ceiling/floor writers (fill -9.8k T
   measured), asm udiv8/smul8 + foot_tab in project() (~5.5k T per visible
   object), BFS rebuild in asm without the 1 KB memset (open-room worst
   case ~271k -> ~76k T, simulated). Start view still 33 images / 4 s
   (~0.2 frames saved, under one image); the BFS gain shows as less
   stutter while enemies re-path, not at the static start view.
-- Build G (PLAN.md wave 2): `copy_view` copies per tile column only rows
+- Build G (speed wave 2): `copy_view` copies per tile column only rows
   [min top, max bot) of this image's rays united with the span last
   written to the same VRAM bank (`r_vh`); `view_reset()` after level load
   and the Select map. Profiler at the start view: copy 2.28 -> 2.04
   frames (-16.9k T; near side walls fill most rows here, so the gain
   grows in open views). Total 7.39 (build E) -> 6.96 frames per image.
   Checked in gearboy: no stale strips turning, at a wall, after the map.
-- Build H (PLAN.md wave 3): unrolled ragged-edge patch (RTOP/RBOT
+- Build H (speed wave 3): unrolled ragged-edge patch (RTOP/RBOT
   macros), colour pass folded into ray_cs + a short fog loop, seen[]
   marked in dda_hx/dda_hy instead of the C loop. Byte-identical to G on
   3,300 random views in an SM83 interpreter. Profiler at the start view:
@@ -343,9 +346,7 @@ tiles).
   (mo_col), ray directions from per-image tables (r_dxs/r_dys), camera
   cell once per image, sd_lu/od_avg inlined. Byte-identical to H on 5,300
   random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
-  total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
-  marker shows blank: the font has no H (B was added in U) - next
-  markers V, Y (I, L, M, P, R, T, U used).
+  total 5.58 frames per image (~10.75 fps, HUD 10-11).
 - Build V (speed, HUD marker V): profiler at the start view 5.77 -> 4.05
   frames per image (~10.4 -> ~14.8 fps, HUD 14-15). Stage lines per
   image: render 406 -> 313, copy 316 -> 198, sprite_update 82 -> 51,
@@ -401,22 +402,22 @@ tiles).
     (every view faster; worst only -600). Gearboy start view, 64-image
     runs: render 319.0 -> 308.2 lines/image, total 622.0 -> ~617 lines
     (~15 fps).
-  - Tried and reverted: PLAN's S4 (ragged rows written once, merged via
+  - Tried and reverted: S4 (ragged rows written once, merged via
     a coverage mask). -3,038 T/view over 400 random views but +6.3
     lines/image at the gearboy start view, where the near walls make
     almost every row ragged; the start view is the speed gate.
   - Checked in gearboy: start, turn, walk, shoot, map, floor 2, CHECK
-    00 throughout. Not yet run on a physical DMG.
-- ROM: ~22 KB of 32 KB used (no MBC). Saves or more floors need an
-  MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
+    00 throughout. Confirmed on a physical DMG as part of build 28.
+- ROM: ~24 KB of 32 KB used (~8 KB free), MBC1+RAM+BATTERY since build
+  25 with 8 KB SRAM (3 save slots use 7.5 KB). More floors or assets
+  past 32 KB need ROM banking. WRAM: ~6.4 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
   Still worth watching: an AI rebuild in an open room can take ~1 frame.
 - Build L (enemy types, items, item size tiers) tested OK in mGBA and on
   a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
   gun drop confirmed by the user. Build P (gun slides instead of jumping):
-  confirmed working by the user (2026-10-20). Build R (floor banner):
-  checked in gearboy. Build T (brute): checked in gearboy. Build U
-  (music, B toggles it on the map) works on a physical DMG (2026-10-20).
+  confirmed working by the user (2026-10-20). Build U (music, B toggles
+  it on the map) works on a physical DMG (2026-10-20).
 - Free shared tiles: 240–243 (2 OBJ pairs or 4 BG tiles); 238–239 hold
   the banner's L and R.
 - Decided: stairs stay one-way (no going back up a floor).
@@ -424,8 +425,8 @@ tiles).
   (25), BY ZAPSKI on the title (26), title attract mode and floor intros
   (27), 3 save slots with a picker (28). **Build 28 confirmed on a DMG
   (2026-10-20)**, which also covers build Y's speed changes.
-- Ideas not done: full wall textures.
-  `textures.h` is dead.
+- Ideas not done: two-colour wall textures, a ranged enemy or floor-4 boss, difficulty and
+  a score screen, footstep/alert sounds.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
   enforce mode-3 VRAM blocking.
 
@@ -443,11 +444,9 @@ tiles).
   can trigger "conditional flow changed by optimizer" miscompiles — use
   plain nested if/else in hot C.
 - SDCC "warning 158: overflow in implicit constant conversion" on the
-  build-marker line is spurious (the value is 160+n < 256).
-- gearboy MCP testing: symbol addresses are in `dungeon.noi` (globals
-  only; statics such as `ex`/`ey`/`ealive` sit just after `cam_x`/`cam_a`).
-  Memory reads can leave the emulator paused (call continue), screenshots
-  lag a few frames, IO reads of NR5x are stale, and enemy contact can kill
-  the player and reload the level mid-test (resetting the camera).
+  FLOOR banner's `HUD_DIGIT(0)` writes in `hud_update()` is spurious (the
+  value is 160+n < 256).
+- Symbol addresses for debugging are in `dungeon.noi` (globals only;
+  statics such as `ex`/`ey`/`ealive` sit just after `cam_x`/`cam_a`).
 - Instruction cost discipline: T-cycles are 4× M-cycles; `ld (de),a` +
   `inc de` is 16 T, so a 320-byte copy is ~7,700 T, not ~2,000.

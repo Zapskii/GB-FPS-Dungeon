@@ -18,7 +18,9 @@ trustworthy in copysim.py, mGBA or on a DMG (`make CHECK=1`).
 
 Bench means are not the whole story: a change can win on 400 random views and
 lose at the start view (the speed gate). Before integrating a render change,
-check the per-view spread, then measure it in gearboy (PLAN.md procedure).
+check the per-view spread, then measure it at the start view in gearboy:
+`make clean && make PROFILE=1`, zero `prof_acc`..`prof_imgs` once in game,
+and read `prof_acc[]` (scanlines per stage) once `prof_imgs` reaches 64.
 
 When the working tree is ahead of HEAD (uncommitted build), take the baseline
 from a copy of `src/` (`cp -r src tools/sim/baseX/src`) — `git archive` only
