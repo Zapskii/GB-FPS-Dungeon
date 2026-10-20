@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define T_MARKER  255u                  /* build marker glyph, copied from the font */
+#define BUILD     25u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -366,10 +366,7 @@ static void enemy_tick(void)
             dmg_cd = 60u;
             flash_pal = 0x1Bu; flash_n = 6u;          /* hurt: invert */
             sfx_play(SFX_HURT);
-            if (hp == 0u) {
-                game_over();
-                load_level(0u);
-            }
+            if (hp == 0u) game_over();     /* loads the save or floor 1 */
         }
     }
     if (dmg_cd) dmg_cd--;
@@ -752,6 +749,61 @@ static void banner(uint8_t y, const char *t)
     set_bkg_tiles(0u, y, 20u, 1u, row);
 }
 
+/* ---- save: battery SRAM (MBC1+RAM+BATTERY, Makefile), one slot at 0xA000.
+ * Magic first, then every variable below in order. Change the list or any
+ * size -> bump the magic, so old saves read as empty. ---- */
+#define SRAM ((uint8_t *)0xA000u)
+static const uint8_t save_magic[4] = {'D', 'G', 'N', '1'};
+static const struct { void *p; uint16_t n; } save_vars[] = {
+    {&cam_x, 2u}, {&cam_y, 2u}, {&cam_a, 1u},
+    {&hp, 1u}, {&keys, 1u}, {&level_no, 1u}, {&kills, 1u}, {&gold, 1u}, {&secs, 2u},
+    {ex, sizeof ex}, {ey, sizeof ey}, {ealive, sizeof ealive},
+    {ehp, sizeof ehp}, {etype, sizeof etype},
+    {&item_n, 1u}, {item_x, sizeof item_x}, {item_y, sizeof item_y},
+    {item_taken, sizeof item_taken}, {item_kind, sizeof item_kind},
+    {&stairs_x, 1u}, {&stairs_y, 1u},
+    {imap, sizeof imap}, {seen, sizeof seen},
+};
+
+static uint8_t save_ok(void)
+{
+    uint8_t r;
+
+    ENABLE_RAM;
+    r = (uint8_t)(memcmp(SRAM, save_magic, 4u) == 0);
+    DISABLE_RAM;
+    return r;
+}
+
+/* store 1: game -> SRAM, 0: SRAM -> game. Magic is cleared before a store
+ * and written last, so a power cut mid-save leaves no slot, not a bad one. */
+static void save_copy(uint8_t store)
+{
+    uint8_t *s = SRAM + 4u, i;
+
+    ENABLE_RAM;
+    if (store) SRAM[0] = 0u;
+    for (i = 0u; i < sizeof save_vars / sizeof save_vars[0]; i++) {
+        if (store) memcpy(s, save_vars[i].p, save_vars[i].n);
+        else       memcpy(save_vars[i].p, s, save_vars[i].n);
+        s += save_vars[i].n;
+    }
+    if (store) memcpy(SRAM, save_magic, 4u);
+    DISABLE_RAM;
+}
+
+static void save_game(void) { save_copy(1u); }
+
+static void load_game(void)
+{
+    save_copy(0u);
+    floor_no = (uint8_t)(level_no + 1u);
+    for (uint8_t i = 0u; i < NENEMY; i++) ehit[i] = 0u;
+    seen_at = 0xFFFFu;
+    ai_reset();
+    banner_t = BANNER_T;
+}
+
 /* Paused overhead map until Select (or A/Start) is pressed again; B toggles music. */
 static void show_map(void)
 {
@@ -775,16 +827,22 @@ static void show_map(void)
 
     set_bkg_data(FONT_BASE, 14u, font_tiles);   /* over sprite tiles: all hidden but the arrow */
     banner(13u, "PRESS B");
+    banner(15u, "START SAVE");
 
     while (joypad() & J_SELECT) wait_vbl_done();
-    for (;;) {                           /* B toggles music, the rest close */
+    for (;;) {                           /* B toggles music, Start saves, Select/A close */
         banner(14u, (NR51_REG & 0x02u) ? "MUSIC ON" : "MUSIC OFF");
         while (!(joypad() & (J_SELECT | J_START | J_A | J_B))) wait_vbl_done();
-        if (!(joypad() & J_B)) break;
-        NR51_REG ^= 0x66u;               /* ch2 + ch3 (music.h) off both sides */
-        while (joypad() & J_B) wait_vbl_done();
+        si = joypad();
+        if (si & J_START) {
+            save_game();
+            banner(15u, "SAVED");
+        } else if (si & J_B) {
+            NR51_REG ^= 0x66u;           /* ch2 + ch3 (music.h) off both sides */
+        } else break;
+        while (joypad() & (J_START | J_B)) wait_vbl_done();
     }
-    while (joypad() & (J_SELECT | J_START | J_A | J_B)) wait_vbl_done();
+    while (joypad() & (J_SELECT | J_A)) wait_vbl_done();
     frame_draw();                        /* bricks back over the text rows */
     set_sprite_data(FONT_BASE, 14u, spr_tiles + 64u);   /* sprites_init's 184.. block */
 }
@@ -803,10 +861,12 @@ static void label_num(char *buf, const char *label, uint16_t v)
 }
 
 /* Full-screen text (4 lines + PRESS START) until Start is pressed, then
- * the normal frame and sprite tiles come back. */
-static void text_screen(const char *l1, const char *l2, const char *l3, const char *l4)
+ * the normal frame and sprite tiles come back. can_load: A also closes it
+ * ("A LOAD SAVE"); returns non-zero if A was the key. */
+static uint8_t text_screen(const char *l1, const char *l2, const char *l3, const char *l4,
+                           uint8_t can_load)
 {
-    uint8_t i;
+    uint8_t i, k = can_load ? (J_START | J_A) : J_START, pad;
 
     for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
     gun_shown = 0xFFu;
@@ -820,16 +880,18 @@ static void text_screen(const char *l1, const char *l2, const char *l3, const ch
     banner(9u, l3);
     banner(11u, l4);
     banner(14u, "PRESS START");
+    if (can_load) banner(15u, "A LOAD SAVE");
     DISPLAY_ON;
 
-    while (joypad() & J_START) wait_vbl_done();
-    while (!(joypad() & J_START)) wait_vbl_done();
-    while (joypad() & J_START) wait_vbl_done();
+    while (joypad() & k) wait_vbl_done();
+    while (!((pad = joypad()) & k)) wait_vbl_done();
+    while (joypad() & k) wait_vbl_done();
 
     DISPLAY_OFF;
     draw_frame();
     sprites_init();                      /* the font overwrote some */
     DISPLAY_ON;
+    return (uint8_t)(pad & J_A);
 }
 
 static void new_run(void)
@@ -848,11 +910,11 @@ static void win_screen(void)
     label_num(a, "KILLS", kills);
     label_num(b, "SECS", secs);
     label_num(c, "GOLD", gold);
-    text_screen("YOU ESCAPED", a, b, c);
+    text_screen("YOU ESCAPED", a, b, c, 0u);
     new_run();
 }
 
-/* Out of hearts: stats, then a fresh run (caller loads floor 1). */
+/* Out of hearts: stats, then the save (A) or a fresh run on floor 1. */
 static void game_over(void)
 {
     char a[12], b[12], c[12];
@@ -860,8 +922,12 @@ static void game_over(void)
     label_num(a, "FLOOR", floor_no);
     label_num(b, "KILLS", kills);
     label_num(c, "GOLD", gold);
-    text_screen("GAME OVER", a, b, c);
-    new_run();
+    if (text_screen("GAME OVER", a, b, c, save_ok())) {
+        load_game();
+    } else {
+        new_run();
+        load_level(0u);
+    }
 }
 
 static void init_screen(void)
@@ -876,7 +942,6 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('Y') - FONT_BASE) << 4]);
     set_bkg_data(T_L, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
     set_bkg_data(T_R, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
     frame_init();
@@ -884,7 +949,8 @@ static void init_screen(void)
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = T_MARKER;                /* build marker */
+    row[9]  = HUD_DIGIT(BUILD / 10u);  /* build number */
+    row[10] = HUD_DIGIT(BUILD % 10u);
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
@@ -912,7 +978,7 @@ static void render_view(void)
 
 void main(void)
 {
-    uint8_t last_vbl, tick = 0u, pad_prev = 0u, fire_cd = 0u;
+    uint8_t last_vbl, tick = 0u, pad_prev = 0u, fire_cd = 0u, i;
 
     init_screen();
     sfx_init();
@@ -921,13 +987,14 @@ void main(void)
     add_VBL(vbl_handler);
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
-    text_screen("DUNGEON", "ESCAPE 4 FLOORS", "", "");
+    i = text_screen("DUNGEON", "ESCAPE 4 FLOORS", "", "", save_ok());
 #ifdef PROFILE
     initrand(0x1234u);
 #else
     initrand((uint16_t)(((uint16_t)DIV_REG << 8) | vbl_count));   /* Start timing = seed */
 #endif
-    load_level(0u);
+    if (i) load_game();
+    else   load_level(0u);
     view_reset();
     last_vbl = vbl_count;
 

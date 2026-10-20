@@ -9,7 +9,8 @@ RUN    := docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)":/work 
 LCC    := /opt/gbdk/bin/lcc
 
 # -Wm-yn : ROM title, -Wl-m/-Wl-j : link map + NoICE symbols (debugging)
-CFLAGS = -Wm-yn"FPSDUNGEON" -Wl-m -Wl-j
+# -Wm-yt0x03 -Wm-ya1 : MBC1+RAM+BATTERY, one 8 KB SRAM bank (save slot)
+CFLAGS = -Wm-yn"FPSDUNGEON" -Wl-m -Wl-j -Wm-yt0x03 -Wm-ya1
 
 # make clean && make PROFILE=1 : stage profiler (src/main.c PROF), fixed seed
 ifdef PROFILE

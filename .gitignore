@@ -13,6 +13,7 @@ __pycache__/
 .claude/settings.local.json
 .DS_Store
 CLAUDE.md
+PLAN.md
 # tools/sim work files
 tools/sim/venv/
 tools/sim/bw/

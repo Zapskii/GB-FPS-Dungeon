@@ -12,9 +12,10 @@ hearts and gold. The
 3D view is a real 128×64 bitmap (64 rays, 2-px columns) drawn into tile
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
-Build marker: the character in the middle of the HUD's bottom row (now
-**U**; 1–9 then letters) identifies the current build; it changes between
-hand-offs.
+Build number: the two digits in the middle of the HUD's bottom row
+(`BUILD` in `src/main.c`, now **25**) identify the current build; it goes
+up by one every hand-off. Builds before 25 used one character (1–9, then
+letters up to Y; the save build was briefly S).
 
 ## Build
 
@@ -32,7 +33,7 @@ No local GBDK needed: the Makefile runs `/opt/gbdk/bin/lcc` inside the
 | D-pad left/right | turn |
 | B + left/right | strafe |
 | A | shoot (hitscan at screen centre, ~4 shots/s) |
-| Select | automap (pauses; B toggles music, shown under the map; Select/A/Start closes) |
+| Select | automap (pauses; B toggles music, Start saves the run, Select/A closes) |
 
 Items are white and scale with distance (about 4, 8 and 16 px). Walk
 over a key to take it, touch a **D** door (dark grey) with a key to open it,
@@ -50,6 +51,8 @@ the run ends on a GAME OVER screen (floor reached, kills, gold). Clear
 floor 4 to escape: a win screen shows kills, seconds played (map time
 excluded) and gold.
 Start on either screen begins a fresh run; a title screen opens the game.
+With a save on the cart, the title and GAME OVER screens also offer
+**A LOAD SAVE**, which puts you back where you saved.
 HUD row 1, right: frames per second (views flipped per 60 VBlanks,
 counted and written by the VBL ISR every second).
 
@@ -168,7 +171,19 @@ health, `G` gold, `M` map scroll, `P` start, `1`–`8` grunts, `B` bats,
 `X` brutes. `load_level()` parses it into the
 collision map, items, spawns, and camera; keys reset per floor, HP carries,
 the floor-4 stairs show `win_screen()`, running out of hearts shows
-`game_over()`; both start a fresh run on new mazes.
+`game_over()`; both start a fresh run on new mazes (GAME OVER can load
+the save instead).
+
+### Saves
+
+The cart is MBC1+RAM+BATTERY with one 8 KB SRAM bank (`-Wm-yt0x03
+-Wm-ya1` in the Makefile). One slot at 0xA000: the magic `DGN1`, then
+the variables listed in `save_vars[]` in order (camera, hp/keys/floor/
+kills/gold/secs, enemies, items, stairs, `imap` with opened doors,
+`seen`), about 2.2 KB. A save clears the magic first and writes it
+last, so a power cut mid-save leaves no slot rather than a broken one.
+Changing `save_vars[]` means bumping the magic. Hit flashes, the AI
+field and the music position are not saved.
 
 ### Automap (Select)
 
@@ -228,7 +243,7 @@ uses the HUD font plus 13 extra letters at base 184 (`font_tiles`: YUCAPD
 TILR GMV; M is 5 px wide so it doesn't read as N; O reuses digit 0).
 Those tiles hold sprites during play, so the font is loaded for each text
 screen and `draw_frame()` + `sprites_init()` restore frame and sprites
-afterwards. The build marker glyph is copied into BG tile 255.
+afterwards.
 
 ### HUD
 
@@ -239,7 +254,7 @@ L and R are copied from the font into tiles 238–239 at boot.
 
 Window row 0: 5 hearts, `K n`, `F n`, gem + 2-digit gold (gem = BG tile
 183), compass `N E S W` with the facing cardinal inverted. Row 1: the
-build marker and the FPS counter. Tiles at base 160 (`src/hud.h`, 23
+build number and the FPS counter. Tiles at base 160 (`src/hud.h`, 23
 tiles).
 
 ## Milestones (measured with the gearboy profiler/MCP)
