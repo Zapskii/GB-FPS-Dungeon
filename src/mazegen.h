@@ -1,7 +1,7 @@
 /* On-cartridge level generator (C port of the old tools/mklevels.py), so
  * every run gets new mazes. Writes a 32x32 char map in the load_level()
  * grammar: '#' '=' wall, 'D' door, 'K' key, 'S' stairs, 'P' start,
- * '1'..'6' enemies, 'H' health, '.' floor.
+ * '1'..'5' grunts, 'B' bats, 'H' health, 'G' gold, 'M' map, '.' floor.
  *
  * 1-wide corridor maze (recursive backtracker on odd cells), a few small
  * rooms, some dead ends knocked through into loops. Key in the farthest
@@ -213,10 +213,17 @@ static uint8_t mz_try(uint8_t floor, uint8_t *m, uint8_t *dist, uint16_t *q)
         if (m[i] == '#')
             if (rand() < 38u) m[i] = '=';
 
-    /* 6 enemies at least 6 steps away, 2 health pickups at least 4 */
-    for (c = 0u; c < 6u; c++) mz_place(m, dist, (uint8_t)('1' + c), 6u);
+    /* enemies at least 6 steps away: 5 grunts (4 on the last floor) and
+     * floor + 1 bats, 8 at most (NENEMY); items at least 4, the map 8 */
+    w = 5u;
+    if (floor == 3u) w = 4u;
+    for (c = 0u; c < w; c++) mz_place(m, dist, (uint8_t)('1' + c), 6u);
+    for (c = 0u; c <= floor; c++) mz_place(m, dist, 'B', 6u);
     mz_place(m, dist, 'H', 4u);
     mz_place(m, dist, 'H', 4u);
+    mz_place(m, dist, 'G', 4u);
+    mz_place(m, dist, 'G', 4u);
+    mz_place(m, dist, 'M', 8u);
     return 1u;
 }
 

@@ -8,7 +8,7 @@
 
 #define AI_MAX_DIST 10u     /* BFS depth cap: farther enemies idle */
 #define AI_QLEN     128u    /* max cells visited per rebuild (bounds cost) */
-#define AI_SPEED    6u
+#define AI_SPEED    6u     /* grunt step per AI tick; caller sets ai_sp per enemy */
 #define AI_FAR      255u
 
 static uint8_t ai_dist[1024];
@@ -16,6 +16,7 @@ static uint16_t ai_q[AI_QLEN];
 static uint16_t ai_pcell;   /* player cell of the current field */
 static uint8_t ai_n;        /* cells the last BFS wrote: ai_q[0..ai_n) */
 static uint8_t ai_d;        /* BFS: distance of the cells being queued */
+static uint8_t ai_sp = AI_SPEED;   /* step size for the next ai_step() */
 
 static void ai_reset(void)
 {
@@ -226,12 +227,12 @@ static void ai_update(void)
     }
 }
 
-/* Signed step from p toward t, at most AI_SPEED, never overshooting. */
+/* Signed step from p toward t, at most ai_sp, never overshooting. */
 static int16_t ai_toward(uint16_t p, uint16_t t)
 {
     int16_t d = (int16_t)(t - p);
-    if (d > (int16_t)AI_SPEED) return (int16_t)AI_SPEED;
-    if (d < -(int16_t)AI_SPEED) return -(int16_t)AI_SPEED;
+    if (d > (int16_t)ai_sp) return (int16_t)ai_sp;
+    if (d < -(int16_t)ai_sp) return -(int16_t)ai_sp;
     return d;
 }
 

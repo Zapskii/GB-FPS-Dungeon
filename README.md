@@ -9,7 +9,7 @@ riveted frame around the view, HUD compass and hearts. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build marker: the character in the middle of the HUD's bottom row (now
-**D**; 1–9 then letters) identifies the current build; it changes between
+**L**; 1–9 then letters) identifies the current build; it changes between
 hand-offs.
 
 ## Build
@@ -30,14 +30,19 @@ No local GBDK needed: the Makefile runs `/opt/gbdk/bin/lcc` inside the
 | A | shoot (hitscan at screen centre, ~4 shots/s) |
 | Select | automap (pauses; Select/A/B/Start closes) |
 
-Keys show as white key sprites and the stairs as a white down-arrow. Walk
+Items are white and scale with distance (about 4, 8 and 16 px). Walk
 over a key to take it, touch a **D** door (dark grey) with a key to open it,
-walk to the arrow to descend. White hearts restore one heart (left lying
-if you're at full health). Enemies chase and hurt on contact (screen
-flashes inverted); one shot kills on floors 1–2, two on floors 3–4 (a hit
-enemy flashes white and is stunned briefly); at 0 hearts the
-run ends on a GAME OVER screen (floor reached, kills). Clear floor 4 to
-escape: a win screen shows kills and seconds played (map time excluded).
+walk to the down-arrow (stairs) to descend. Hearts restore one heart (left
+lying if you're at full health), gems add to the gold count (HUD, next to
+the floor number), and a scroll reveals the whole floor on the automap.
+Grunts (dark blobs) walk the floor; bats (light wings, flying at eye
+level) move twice as fast and die in one shot. Each floor has 5 grunts
+(4 on floor 4) and floor-number bats, 8 at most. Enemies hurt on contact
+(screen flashes inverted); one shot kills grunts on floors 1–2, two on
+floors 3–4 (a hit enemy flashes white and is stunned briefly); at 0 hearts
+the run ends on a GAME OVER screen (floor reached, kills, gold). Clear
+floor 4 to escape: a win screen shows kills, seconds played (map time
+excluded) and gold.
 Start on either screen begins a fresh run; a title screen opens the game.
 HUD row 1, right: frames per second (views flipped per 60 VBlanks,
 counted and written by the VBL ISR every second).
@@ -49,7 +54,7 @@ counted and written by the VBL ISR every second).
 The viewport is 16×8 BG tiles (indices 0–127, column-major) centred on a
 black border. With LCDC.4 = 1 those indices read 0x8000–0x87FF (bank A),
 with 0 they read 0x9000–0x97FF (bank B); indices 128+ are shared by both
-modes, so the border, HUD (base 160) and sprites (base 206) live there.
+modes, so the border, HUD (base 160) and sprites live there.
 
 Per image the main loop: runs game logic once per elapsed VBlank (60 Hz
 regardless of render rate, capped at 4 catch-up frames), renders into
@@ -101,20 +106,29 @@ mode-3 blocking; gearboy does not.
   converge with perspective; `#` walls stay plain.
 - `src/textures.h` is no longer used (it was the old tile-strip texture set).
 
-### Enemies (`src/ai.h` movement, `src/enemies.h` sprite art)
+### Enemies and items (`src/ai.h` movement, `src/sprites.h` art)
 
 8 entities moved on every 4th VBlank by `src/ai.h`: a BFS distance field
 from the player's cell (rebuilt only when that cell changes or a door
 opens, capped at 10 steps / 128 cells, ~1.3 KB RAM); each enemy walks
 downhill along corridors, centring on the cross axis before advancing so
-it never cuts corners (6 units a step). Farther than 10 steps they idle.
-Hit points `ehp[]` (1, or 2 from floor 3); a non-lethal hit sets
+it never cuts corners (6 units a step, `ai_sp` = 12 for bats). Farther
+than 10 steps they idle. `etype[]`: 0 grunt, 1 bat.
+Hit points `ehp[]` (1, or 2 for grunts from floor 3); a non-lethal hit sets
 `ehit[]` = 3 AI ticks of stun, drawn with OBP1 so the sprite flashes.
 Contact damage under 0.78 cell with a 60-tick cooldown, driving `hp`
 and the HUD hearts. `project()` is shared by billboards, item sprites and
 `shoot()`; flashes are a BGP override counted down in the VBL handler.
-Sprites are billboards in three tiers (8×16 far, 16×16 mid, 24×32 near =
-18 tiles at base 206). Projection is int32 forward/lateral (int16
+Sprites are billboards in three distance tiers. Grunts: 8×16 far, 16×16
+mid, 24×32 near (at 3 and 1.5 cells). Bats: ~4, 8 and 16 px wide, bottom at
+screen y 68 with a ±2 px bob. Items: tiny, normal, 16 px (at 4 and 2
+cells). `tools/gen_sprites.py` turns ASCII art into `src/sprites.h`
+(29 OBJ pairs at 156–159 and 184–237); item big tiers are the normal
+art doubled, tiny ones hand drawn or halved, and a pair that mirrors an
+earlier one is stored once and drawn with X-flip (bit 0 of the tile byte
+in the art lists). `draw_art()` places any `{w, h, tiles}` art by its
+bottom centre; `shoot()` uses the art width as the hit half-width.
+Projection is int32 forward/lateral (int16
 overflows at 768×127), screen x via a shift-subtract divide, culled by
 range and FOV, max 3 billboards, hidden when the wall at their column is
 nearer, feet placed on the floor line. Computed after the copy from the
@@ -130,12 +144,12 @@ small rooms, knocks some dead ends through into loops (fewer rooms/loops on
 later floors), then BFS from the start: key in the farthest dead end,
 stairs in another far dead end whose only neighbour is a plain corridor
 cell, which becomes the door (so the door seals exactly the stairs alcove
-and no flood-fill validation is needed), 6 enemies ≥ 6 steps away and 2
-health pickups ≥ 4 steps away, 15% of walls as `=`. It writes the char map
+and no flood-fill validation is needed), grunts and bats ≥ 6 steps away,
+2 health, 2 gold ≥ 4 steps, a map scroll ≥ 8, 15% of walls as `=`. It writes the char map
 into `vbuf` and uses `seen[]` and the back of `vbuf` as scratch (both are
 rewritten afterwards), so it costs no extra RAM.
 Map grammar: `#` wall, `=` wall 2, `D` door, `K` key, `S` stairs, `H`
-health, `P` start, `1`–`8` enemy spawns. `load_level()` parses it into the
+health, `G` gold, `M` map scroll, `P` start, `1`–`8` grunts, `B` bats. `load_level()` parses it into the
 collision map, items, spawns, and camera; keys reset per floor, HP carries,
 the floor-4 stairs show `win_screen()`, running out of hearts shows
 `game_over()`; both start a fresh run on new mazes.
@@ -147,7 +161,8 @@ cell) plus the wall cell every ray hit (`r_hits[64]`, stored by render.s).
 `show_map()` pauses the game, draws explored cells at 2×2 px into `vbuf`
 (64×64 in the middle of the viewport: floor dark, wall light, door/key/
 stairs white, unexplored black), copies and flips like a normal frame, and
-shows the player as an 8-direction white arrow sprite (tiles 228–243).
+shows the player as a white arrow sprite: the one direction needed is
+copied from `arrow_tiles` (8 directions) into OBJ pair 154–155 each time.
 Cleared on level load.
 
 ### Sound (`src/sfx.h`)
@@ -176,12 +191,14 @@ Art sources: `tools/gen_gun.py` (ASCII art → `src/gun.h` + preview PNG),
 waits for Start) backs the title, `game_over()` and `win_screen()`. Text
 uses the HUD font plus 13 extra letters at base 184 (`font_tiles`: YUCAPD
 TILR GMV; M is 5 px wide so it doesn't read as N; O reuses digit 0).
-`draw_frame()` restores the border and viewport tile map afterwards.
+Those tiles hold sprites during play, so the font is loaded for each text
+screen and `draw_frame()` + `sprites_init()` restore frame and sprites
+afterwards. The build marker glyph is copied into BG tile 255.
 
 ### HUD
 
-Window row 0: 5 hearts, `K n`, `F n`, compass `N E S W` with the facing
-cardinal inverted. Row 1: the build-marker digit and the FPS counter. Tiles at
+Window row 0: 5 hearts, `K n`, `F n`, gem + 2-digit gold (gem = BG tile
+183), compass `N E S W` with the facing cardinal inverted. Row 1: the build-marker digit and the FPS counter. Tiles at
 base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
 
 ## Milestones (measured with the gearboy profiler/MCP)
@@ -252,15 +269,17 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
   marker shows blank: the font has no H (or B) - use I, L, M, P, R, T,
   U, V, Y next.
-- ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
+- ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking). Builds 5–I are not yet checked on a real DMG: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
-- Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health
-  sprite at 154–155.
-- Ideas not done: more billboard size tiers (tiny ~7 px and ~20 px blobs;
-  sprite tiles 156–157 and 198–205 are free for them), full wall textures.
+  The gun also hides items dead ahead at mid range (it sits on the
+  centre of the floor line).
+- Build L (enemy types, items, item size tiers): checked in gearboy only.
+- Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
+- Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
+  or reuse grunt art one tier larger as a "brute"), full wall textures.
   `textures.h` is dead.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
   enforce mode-3 VRAM blocking.

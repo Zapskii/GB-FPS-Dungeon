@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include "tables.h"
 #include "hud.h"
-#include "enemies.h"
+#include "sprites.h"
 #include <rand.h>
 #include "mazegen.h"
 
@@ -47,6 +47,8 @@
 #define HUD_INV_E (HUD_BASE + 20u)
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
+#define HUD_GOLD  183u                  /* gem, after the HUD set */
+#define T_MARKER  255u                  /* build marker glyph, copied from the font */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -85,7 +87,7 @@ uint8_t  cam_a;              /* 0..255, 256 = full turn, 0 = +x */
 /* HUD/game state (early: move()/load_level/hud all use it). */
 static uint8_t gun_bob = 0u;
 static uint8_t hp = HUD_MAX_HP, keys = 0u, floor_no = 1u;
-static uint8_t kills = 0u, sec_frames = 0u;   /* run stats for the win screen */
+static uint8_t kills = 0u, gold = 0u, sec_frames = 0u;   /* run stats for the end screens */
 static uint16_t secs = 0u;
 static void win_screen(void);
 static void game_over(void);
@@ -99,8 +101,14 @@ static uint16_t ex[NENEMY], ey[NENEMY];
 static uint8_t ealive[NENEMY];
 static uint8_t dmg_cd;
 static uint8_t level_no, item_n, stairs_x, stairs_y;
-static uint8_t item_x[8], item_y[8], item_taken[8], item_kind[8];   /* kind: 0 key, 1 health */
+static uint8_t item_x[8], item_y[8], item_taken[8], item_kind[8];   /* kind: item_art row */
+#define IT_KEY    0u
+#define IT_HEALTH 1u
+#define IT_GOLD   2u
+#define IT_MAP    3u
+#define IT_STAIRS 4u
 static uint8_t ehp[NENEMY], ehit[NENEMY];   /* enemy hits left, hit-flash ticks */
+static uint8_t etype[NENEMY];               /* enemy_art row: 0 grunt, 1 bat */
 
 
 #ifdef PROFILE
@@ -155,24 +163,33 @@ static void load_level(uint8_t n)
         else if (ch == 'P') {
             cam_x = (uint16_t)(((uint16_t)(i & 31u) << 8) + 128u);
             cam_y = (uint16_t)(((uint16_t)(i >> 5) << 8) + 128u);
-        } else if (ch == 'K' || ch == 'H') {
+        } else if (ch == 'K' || ch == 'H' || ch == 'G' || ch == 'M') {
             if (item_n < 8u) {
                 item_x[item_n] = (uint8_t)(i & 31u);
                 item_y[item_n] = (uint8_t)(i >> 5);
                 item_taken[item_n] = 0u;
-                item_kind[item_n] = (ch == 'H') ? 1u : 0u;
+                if (ch == 'K')      item_kind[item_n] = IT_KEY;
+                else if (ch == 'H') item_kind[item_n] = IT_HEALTH;
+                else if (ch == 'G') item_kind[item_n] = IT_GOLD;
+                else                item_kind[item_n] = IT_MAP;
                 item_n++;
             }
         } else if (ch == 'S') {
             stairs_x = (uint8_t)(i & 31u);
             stairs_y = (uint8_t)(i >> 5);
-        } else if (ch >= '1' && ch <= '8') {
+        } else if ((ch >= '1' && ch <= '8') || ch == 'B') {
             if (ne < NENEMY) {
                 ex[ne] = (uint16_t)(((uint16_t)(i & 31u) << 8) + 128u);
                 ey[ne] = (uint16_t)(((uint16_t)(i >> 5) << 8) + 128u);
                 ealive[ne] = 1u;
-                ehp[ne] = (n >= 2u) ? 2u : 1u;   /* floors 3-4: two hits */
                 ehit[ne] = 0u;
+                if (ch == 'B') {                 /* bat: fast, flies, one hit */
+                    etype[ne] = 1u;
+                    ehp[ne] = 1u;
+                } else {
+                    etype[ne] = 0u;
+                    ehp[ne] = (n >= 2u) ? 2u : 1u;   /* floors 3-4: two hits */
+                }
                 ne++;
             }
         }
@@ -229,7 +246,7 @@ static void move(int16_t dx, int16_t dy)
     if (!c) cam_y = ny;
 }
 
-/* Key pickup and stairs, checked after movement. */
+/* Item pickups and stairs, checked after movement. */
 static void post_move(void)
 {
     uint8_t cx = (uint8_t)(cam_x >> 8), cy = (uint8_t)(cam_y >> 8);
@@ -249,15 +266,19 @@ static void post_move(void)
         if (!item_taken[i]) {
             if (item_x[i] == cx) {
                 if (item_y[i] == cy) {
-                    if (item_kind[i] == 0u) {
-                        item_taken[i] = 1u;
-                        keys++;
-                        sfx_play(SFX_KEY);
-                    } else if (hp < HUD_MAX_HP) {   /* health: left lying if full */
-                        item_taken[i] = 1u;
+                    uint8_t k = item_kind[i];
+                    if (k == IT_HEALTH) {
+                        if (hp >= HUD_MAX_HP) continue;   /* left lying if full */
                         hp++;
-                        sfx_play(SFX_KEY);
+                    } else if (k == IT_KEY) {
+                        keys++;
+                    } else if (k == IT_GOLD) {
+                        gold++;
+                    } else {
+                        memset(seen, 1, sizeof(seen));     /* map: whole floor on the automap */
                     }
+                    item_taken[i] = 1u;
+                    sfx_play(SFX_KEY);
                 }
             }
         }
@@ -319,7 +340,11 @@ static void enemy_tick(void)
         adx = dx < 0 ? (int16_t)-dx : dx;
         ady = dy < 0 ? (int16_t)-dy : dy;
         if (ehit[i]) ehit[i]--;                    /* stunned while flashing */
-        else ai_step(i);                           /* follow corridors toward the player */
+        else {                                     /* follow corridors toward the player */
+            ai_sp = AI_SPEED;
+            if (etype[i]) ai_sp = AI_SPEED * 2u;   /* bats */
+            ai_step(i);
+        }
         if (adx < 200 && ady < 200 && dmg_cd == 0u) {
             if (hp) hp--;
             dmg_cd = 60u;
@@ -335,28 +360,8 @@ static void enemy_tick(void)
 }
 
 
-/* Item sprites (8x16, OBP1 so colour 3 shows white): key, stairs arrow. */
-#define SPR_KEY    224u
-#define SPR_STAIRS 226u
-#define SPR_HEALTH 154u                 /* after the gun tiles */
 #define MAX_SPR    40u
-const uint8_t item_tiles[4 * 16] = {
-    /* 224 key top: empty */
-    0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
-    /* 225 key bottom: ring + bit */
-    0,0, 0x38,0x38, 0x44,0x44, 0x38,0x38, 0x10,0x10, 0x1C,0x1C, 0x10,0x10, 0x1C,0x1C,
-    /* 226 stairs top: arrow shaft */
-    0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18, 0x18,0x18,
-    /* 227 stairs bottom: arrow head */
-    0x18,0x18, 0x18,0x18, 0xFF,0xFF, 0x7E,0x7E, 0x3C,0x3C, 0x18,0x18, 0,0, 0,0,
-};
-
-const uint8_t health_tiles[2 * 16] = {
-    /* 154 top: empty */
-    0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0,
-    /* 155 bottom: heart */
-    0,0, 0x6C,0x6C, 0xFE,0xFE, 0xFE,0xFE, 0x7C,0x7C, 0x38,0x38, 0x10,0x10, 0,0,
-};
+#define BAT_Y      68u                  /* screen y of a bat sprite's bottom: just above eye level */
 
 /* Project a world point (8.8) with the current camera. Returns 1 when it is
  * in range, inside the 90 deg FOV and nearer than the wall at its column
@@ -420,10 +425,43 @@ static uint8_t enemy_tier(int16_t fwd)
     return 0u;
 }
 
+/* Items are about 1/4 cell: ~16 px nearer than 2 cells, ~8 px to 4, then ~4. */
+static uint8_t item_tier(int16_t fwd)
+{
+    if (fwd < 512) return 2u;
+    if (fwd < 1024) return 1u;
+    return 0u;
+}
+
+/* One billboard from sprites.h art {w, h, tile|flip...}, bottom centre at
+ * screen (x, y). Returns the next free OAM slot. */
+static uint8_t draw_art(uint8_t si, const uint8_t *a, uint8_t x, uint8_t y, uint8_t pal)
+{
+    uint8_t w = a[0], h = a[1], r, c, t, ox;
+    uint8_t x0 = (uint8_t)(x - (w << 2) + 8u);          /* OAM = screen + (8, 16) */
+    uint8_t oy = (uint8_t)(y - (h << 4) + 16u);
+
+    a += 2;
+    for (r = 0u; r < h; r++) {
+        ox = x0;
+        for (c = 0u; c < w; c++) {
+            if (si >= MAX_SPR) return si;
+            t = *a++;
+            set_sprite_tile(si, (uint8_t)(t & 0xFEu));
+            if (t & 1u) set_sprite_prop(si, (uint8_t)(pal | S_FLIPX));
+            else        set_sprite_prop(si, pal);
+            move_sprite(si, ox, oy);
+            si++;
+            ox += 8u;
+        }
+        oy += 16u;
+    }
+    return si;
+}
+
 /* A: hitscan the nearest visible enemy overlapping the screen centre. */
 static void shoot(void)
 {
-    static const uint8_t half[3] = {4u, 8u, 12u};   /* billboard half-widths */
     uint8_t i, best = 0xFFu, d;
     int16_t best_fwd = 0x7FFF;
 
@@ -433,7 +471,7 @@ static void shoot(void)
         if (!ealive[i]) continue;
         if (!project(ex[i], ey[i])) continue;
         d = (p_x > 80u) ? (uint8_t)(p_x - 80u) : (uint8_t)(80u - p_x);
-        if (d > half[enemy_tier(p_fwd)]) continue;
+        if (d > (uint8_t)(enemy_art[etype[i]][enemy_tier(p_fwd)][0] << 2)) continue;   /* half width */
         if (p_fwd < best_fwd) { best_fwd = p_fwd; best = i; }
     }
     if (best != 0xFFu) {
@@ -452,61 +490,34 @@ static void shoot(void)
 /* Billboards for the camera the view was just rendered from. */
 static void sprite_update(void)
 {
-    uint8_t si = GUN_SPRITES, drawn = 0u, i, x, top, pal;   /* 0.. = gun */
+    static const int8_t bob[8] = {0, 1, 2, 1, 0, -1, -2, -1};
+    uint8_t si = GUN_SPRITES, drawn = 0u, i, y, pal;   /* 0.. = gun */
 
     for (i = 0u; i < NENEMY; i++) {
         if (drawn >= 3u) break;
         if (!ealive[i]) continue;
         if (!project(ex[i], ey[i])) continue;
-        x = p_x;
         pal = 0u;
         if (ehit[i]) pal = S_PALETTE;
-        /* OAM coords: screen + (8, 16) */
-        switch (enemy_tier(p_fwd)) {
-        case 0u:
-            top = p_foot;
-            set_sprite_tile(si, 206u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 4u), top); si++;
-            break;
-        case 1u:
-            top = p_foot;
-            set_sprite_tile(si, 208u); set_sprite_prop(si, pal); move_sprite(si, x, top); si++;
-            set_sprite_tile(si, 210u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 8u), top); si++;
-            break;
-        default:
-            top = (uint8_t)(p_foot - 16u);
-            set_sprite_tile(si, 212u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x - 4u), top); si++;
-            set_sprite_tile(si, 214u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 4u), top); si++;
-            set_sprite_tile(si, 216u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 12u), top); si++;
-            top = (uint8_t)(top + 16u);
-            set_sprite_tile(si, 218u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x - 4u), top); si++;
-            set_sprite_tile(si, 220u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 4u), top); si++;
-            set_sprite_tile(si, 222u); set_sprite_prop(si, pal); move_sprite(si, (uint8_t)(x + 12u), top); si++;
-            break;
-        }
+        y = p_foot;                                     /* grunts stand on the floor */
+        if (etype[i]) y = (uint8_t)(BAT_Y + bob[(uint8_t)((vbl_count >> 3) + i) & 7u]);
+        si = draw_art(si, enemy_art[etype[i]][enemy_tier(p_fwd)], p_x, y, pal);
         drawn++;
     }
-    /* keys and stairs: one 8x16 each, standing on the floor */
+    /* items and stairs stand on the floor; OBP1 so colour 3 shows white */
     for (i = 0u; i < item_n; i++) {
         if (item_taken[i]) continue;
-        if (si >= MAX_SPR) break;
         if (!project((uint16_t)((item_x[i] << 8) + 128u), (uint16_t)((item_y[i] << 8) + 128u))) continue;
-        if (item_kind[i]) set_sprite_tile(si, SPR_HEALTH);
-        else              set_sprite_tile(si, SPR_KEY);
-        set_sprite_prop(si, S_PALETTE);
-        move_sprite(si, (uint8_t)(p_x + 4u), p_foot); si++;
+        si = draw_art(si, item_art[item_kind[i]][item_tier(p_fwd)], p_x, p_foot, S_PALETTE);
     }
-    if (si < MAX_SPR) {
-        if (project((uint16_t)((stairs_x << 8) + 128u), (uint16_t)((stairs_y << 8) + 128u))) {
-            set_sprite_tile(si, SPR_STAIRS); set_sprite_prop(si, S_PALETTE);
-            move_sprite(si, (uint8_t)(p_x + 4u), p_foot); si++;
-        }
-    }
+    if (project((uint16_t)((stairs_x << 8) + 128u), (uint16_t)((stairs_y << 8) + 128u)))
+        si = draw_art(si, item_art[IT_STAIRS][item_tier(p_fwd)], p_x, p_foot, S_PALETTE);
     while (si < MAX_SPR) { move_sprite(si, 0u, 0u); si++; }
 }
 
 /* ---- automap (Select): explored cells, 2x2 px each, 64x64 in the middle
  * of the viewport; the player is an 8-direction arrow sprite. ---- */
-#define SPR_ARROW 228u                   /* 8 dirs x (arrow, blank) */
+#define SPR_ARROW 154u                   /* one pair, loaded per map from 8 dirs x (arrow, blank) */
 #define MAP_X0    32u                    /* map left edge inside vbuf, px */
 const uint8_t arrow_tiles[16 * 16] = {
     0x00,0x00, 0x10,0x10, 0x08,0x08, 0x7C,0x7C, 0x08,0x08, 0x10,0x10, 0x00,0x00, 0x00,0x00,
@@ -529,10 +540,7 @@ const uint8_t arrow_tiles[16 * 16] = {
 
 static void init_enemies(void)
 {
-    set_sprite_data(206u, 18u, enemy_tiles);
-    set_sprite_data(SPR_KEY, 4u, item_tiles);
-    set_sprite_data(SPR_HEALTH, 2u, health_tiles);
-    set_sprite_data(SPR_ARROW, 16u, arrow_tiles);
+    sprites_init();
     gun_init();
     OBP0_REG = 0xE4u;
     OBP1_REG = 0x24u;                    /* colour 3 -> white, 2 -> light */
@@ -593,7 +601,8 @@ static void show_map(void)
     copy_vbuf();
     view_reset();                        /* the map replaced that bank's view */
     /* arrow centre is pixel (3,3) of its tile; OAM = screen + (8, 16) */
-    set_sprite_tile(0u, (uint8_t)(SPR_ARROW + ((((uint8_t)(cam_a + 16u)) >> 5) << 1)));
+    set_sprite_data(SPR_ARROW, 2u, &arrow_tiles[(uint16_t)(((uint8_t)(cam_a + 16u)) >> 5) << 5]);   /* STAT-safe */
+    set_sprite_tile(0u, SPR_ARROW);
     set_sprite_prop(0u, S_PALETTE);      /* white */
     move_sprite(0u, (uint8_t)(VIEW_X0 + MAP_X0 + (cam_x >> 7) - 3u + 8u),
                     (uint8_t)(VIEW_Y0 + (cam_y >> 7) - 3u + 16u));
@@ -619,6 +628,9 @@ static void init_hud(void)
     row[6] = HUD_DIGIT(keys);
     row[7] = HUD_F;
     row[8] = HUD_DIGIT(floor_no);
+    row[10] = HUD_GOLD;
+    row[11] = HUD_DIGIT(gold / 10u);
+    row[12] = HUD_DIGIT(gold % 10u);
     row[13] = HUD_N;
     row[15] = HUD_E;
     row[17] = HUD_S;
@@ -632,7 +644,7 @@ void hud_update(void)                    /* called from the VBL ISR */
     static const uint8_t cell[4] = {15u, 17u, 19u, 13u};      /* E S W N */
     static const uint8_t norm[4] = {HUD_E, HUD_S, HUD_W, HUD_N};
     static const uint8_t inv[4]  = {HUD_INV_E, HUD_INV_S, HUD_INV_W, HUD_INV_N};
-    static uint8_t last_hp = 0xFFu, last_keys = 0xFFu;
+    static uint8_t last_hp = 0xFFu, last_keys = 0xFFu, last_gold = 0xFFu;
     uint8_t d = (uint8_t)(((cam_a + 32u) >> 6) & 3u);
 
     if (d != hud_dir) {
@@ -649,6 +661,11 @@ void hud_update(void)                    /* called from the VBL ISR */
         WM(0, 6) = HUD_DIGIT(keys);
         last_keys = keys;
     }
+    if (gold != last_gold) {
+        WM(0, 11) = HUD_DIGIT(gold / 10u);
+        WM(0, 12) = HUD_DIGIT(gold % 10u);
+        last_gold = gold;
+    }
     if (floor_no != hud_last_floor) {
         WM(0, 8) = HUD_DIGIT(floor_no);
         hud_last_floor = floor_no;
@@ -657,7 +674,8 @@ void hud_update(void)                    /* called from the VBL ISR */
 
 
 /* Extra letters for the title/end screens, HUD style (3x5, black on white).
- * O reuses digit 0; E S N W K F come from the HUD set. */
+ * O reuses digit 0; E S N W K F come from the HUD set. Loaded only while a
+ * text screen is up: in play these tiles hold sprites (sprites.h). */
 #define FONT_BASE 184u
 const uint8_t font_tiles[13 * 16] = {
     0,0, 0,0, 40,40, 40,40, 16,16, 16,16, 16,16, 0,0,   /* Y */
@@ -673,6 +691,11 @@ const uint8_t font_tiles[13 * 16] = {
     0,0, 0,0, 56,56, 32,32, 40,40, 40,40, 56,56, 0,0,   /* G */
     0,0, 0,0, 68,68, 108,108, 84,84, 68,68, 68,68, 0,0, /* M (5 wide, else it reads as N) */
     0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 16,16, 0,0,   /* V */
+};
+
+/* HUD gem for the gold count (BG tile 183) */
+const uint8_t gold_tile[16] = {
+    0,0, 0x7C,0x7C, 0xD6,0xD6, 0xFE,0xFE, 0x6C,0x6C, 0x38,0x38, 0x10,0x10, 0,0,
 };
 
 static uint8_t glyph(char ch)
@@ -728,19 +751,21 @@ static void label_num(char *buf, const char *label, uint16_t v)
     buf[i] = 0;
 }
 
-/* Full-screen text (3 lines + PRESS START) until Start is pressed, then
- * the normal frame comes back. */
-static void text_screen(const char *l1, const char *l2, const char *l3)
+/* Full-screen text (4 lines + PRESS START) until Start is pressed, then
+ * the normal frame and sprite tiles come back. */
+static void text_screen(const char *l1, const char *l2, const char *l3, const char *l4)
 {
     uint8_t i;
 
     for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
     DISPLAY_OFF;
+    set_bkg_data(FONT_BASE, 13u, font_tiles);
     for (i = 0u; i < 18u; i++) banner(i, "");
     banner(4u, l1);
     banner(7u, l2);
     banner(9u, l3);
-    banner(12u, "PRESS START");
+    banner(11u, l4);
+    banner(14u, "PRESS START");
     DISPLAY_ON;
 
     while (joypad() & J_START) wait_vbl_done();
@@ -749,6 +774,7 @@ static void text_screen(const char *l1, const char *l2, const char *l3)
 
     DISPLAY_OFF;
     draw_frame();
+    sprites_init();                      /* the font overwrote some */
     DISPLAY_ON;
 }
 
@@ -756,28 +782,31 @@ static void new_run(void)
 {
     hp = HUD_MAX_HP;
     kills = 0u;
+    gold = 0u;
     secs = 0u;
 }
 
 /* Cleared floor 4: stats, then a fresh run (caller loads floor 1). */
 static void win_screen(void)
 {
-    char a[12], b[12];
+    char a[12], b[12], c[12];
 
     label_num(a, "KILLS", kills);
     label_num(b, "SECS", secs);
-    text_screen("YOU ESCAPED", a, b);
+    label_num(c, "GOLD", gold);
+    text_screen("YOU ESCAPED", a, b, c);
     new_run();
 }
 
 /* Out of hearts: stats, then a fresh run (caller loads floor 1). */
 static void game_over(void)
 {
-    char a[12], b[12];
+    char a[12], b[12], c[12];
 
     label_num(a, "FLOOR", floor_no);
     label_num(b, "KILLS", kills);
-    text_screen("GAME OVER", a, b);
+    label_num(c, "GOLD", gold);
+    text_screen("GAME OVER", a, b, c);
     new_run();
 }
 
@@ -792,13 +821,14 @@ static void init_screen(void)
     BGP_REG = 0xE4u;
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
-    set_bkg_data(FONT_BASE, 13u, font_tiles);
+    set_bkg_data(HUD_GOLD, 1u, gold_tile);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
     frame_init();
     draw_frame();
 
     for (uint8_t c = 0; c < 20u; c++) row[c] = T_WHITE;
     set_win_tiles(0u, 0u, 20u, 1u, row);
-    row[10] = glyph('I');              /* build marker */
+    row[10] = T_MARKER;                /* build marker */
     set_win_tiles(0u, 1u, 20u, 1u, row);
 }
 
@@ -835,7 +865,7 @@ void main(void)
     add_VBL(vbl_handler);
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
-    text_screen("DUNGEON", "ESCAPE 4 FLOORS", "");
+    text_screen("DUNGEON", "ESCAPE 4 FLOORS", "", "");
 #ifdef PROFILE
     initrand(0x1234u);
 #else
