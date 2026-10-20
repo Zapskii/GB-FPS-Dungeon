@@ -297,8 +297,8 @@ tiles).
   random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
   marker shows blank: the font has no H (or B) - next markers U, V, Y
-  (I, L, M, P, R, T used).
-- ROM: ~21 KB of 32 KB used (no MBC). Music, saves or more floors need an
+  (I, L, M, P, R, T, U used).
+- ROM: ~22 KB of 32 KB used (no MBC). Saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
   Still worth watching: an AI rebuild in an open room can take ~1 frame.
@@ -306,7 +306,8 @@ tiles).
   a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
   gun drop confirmed by the user. Build P (gun slides instead of jumping):
   confirmed working by the user (2026-10-20). Build R (floor banner):
-  checked in gearboy. Build T (brute): checked in gearboy.
+  checked in gearboy. Build T (brute): checked in gearboy. Build U
+  (music, B toggles it on the map) works on a physical DMG (2026-10-20).
 - Free shared tiles: 240–243 (2 OBJ pairs or 4 BG tiles); 238–239 hold
   the banner's L and R.
 - Decided: stairs stay one-way (no going back up a floor).
