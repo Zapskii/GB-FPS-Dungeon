@@ -487,31 +487,67 @@ static void shoot(void)
     }
 }
 
-/* Billboards for the camera the view was just rendered from. */
+/* DMG shows the first 10 OBJ of each scanline in OAM order. The gun is
+ * slots 0-5 (3 per line); billboards share the other 7 by width, so a
+ * whole far billboard is skipped rather than a near one losing columns.
+ * Conservative: widths count as if every billboard shared one line. */
+#define SPR_LINE 7u
+static uint8_t item_ahead;              /* an item is drawn behind the gun: lower it */
+
+/* Item art at the last project(), if it fits the line budget. */
+static uint8_t draw_item(uint8_t si, uint8_t kind, uint8_t *room)
+{
+    const uint8_t *a = item_art[kind][item_tier(p_fwd)];
+
+    if (a[0] > *room) return si;
+    *room -= a[0];
+    if (p_x > 64u && p_x < 104u)        /* overlaps the gun (screen x 72-96, top 72) */
+        if (p_foot > 72u) item_ahead = 1u;
+    return draw_art(si, a, p_x, p_foot, S_PALETTE);
+}
+
+/* Billboards for the camera the view was just rendered from: up to 3
+ * enemies nearest first, then items and stairs. */
 static void sprite_update(void)
 {
     static const int8_t bob[8] = {0, 1, 2, 1, 0, -1, -2, -1};
-    uint8_t si = GUN_SPRITES, drawn = 0u, i, y, pal;   /* 0.. = gun */
+    static uint8_t vi[NENEMY], vx[NENEMY], vfoot[NENEMY];
+    static int16_t vfwd[NENEMY];
+    uint8_t si = GUN_SPRITES, room = SPR_LINE, n = 0u, k, j, best, i, y, pal;   /* 0.. = gun */
+    const uint8_t *a;
 
     for (i = 0u; i < NENEMY; i++) {
-        if (drawn >= 3u) break;
         if (!ealive[i]) continue;
         if (!project(ex[i], ey[i])) continue;
+        vi[n] = i; vx[n] = p_x; vfoot[n] = p_foot; vfwd[n] = p_fwd;
+        n++;
+    }
+    for (k = 0u; k < 3u; k++) {
+        best = 0xFFu;
+        p_fwd = 0x7FFF;                                 /* project() caps fwd at 2560 */
+        for (j = 0u; j < n; j++)
+            if (vfwd[j] < p_fwd) { p_fwd = vfwd[j]; best = j; }
+        if (best == 0xFFu) break;
+        vfwd[best] = 0x7FFF;                            /* taken */
+        i = vi[best];
+        a = enemy_art[etype[i]][enemy_tier(p_fwd)];
+        if (a[0] > room) continue;
+        room -= a[0];
         pal = 0u;
         if (ehit[i]) pal = S_PALETTE;
-        y = p_foot;                                     /* grunts stand on the floor */
+        y = vfoot[best];                                /* grunts stand on the floor */
         if (etype[i]) y = (uint8_t)(BAT_Y + bob[(uint8_t)((vbl_count >> 3) + i) & 7u]);
-        si = draw_art(si, enemy_art[etype[i]][enemy_tier(p_fwd)], p_x, y, pal);
-        drawn++;
+        si = draw_art(si, a, vx[best], y, pal);
     }
     /* items and stairs stand on the floor; OBP1 so colour 3 shows white */
+    item_ahead = 0u;
     for (i = 0u; i < item_n; i++) {
         if (item_taken[i]) continue;
         if (!project((uint16_t)((item_x[i] << 8) + 128u), (uint16_t)((item_y[i] << 8) + 128u))) continue;
-        si = draw_art(si, item_art[item_kind[i]][item_tier(p_fwd)], p_x, p_foot, S_PALETTE);
+        si = draw_item(si, item_kind[i], &room);
     }
     if (project((uint16_t)((stairs_x << 8) + 128u), (uint16_t)((stairs_y << 8) + 128u)))
-        si = draw_art(si, item_art[IT_STAIRS][item_tier(p_fwd)], p_x, p_foot, S_PALETTE);
+        si = draw_item(si, IT_STAIRS, &room);
     while (si < MAX_SPR) { move_sprite(si, 0u, 0u); si++; }
 }
 
@@ -822,7 +858,7 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('M') - FONT_BASE) << 4]);
     frame_init();
     draw_frame();
 
@@ -914,6 +950,12 @@ void main(void)
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
         PROF(5);
         gun_draw(0u, (uint8_t)(fire_cd > 9u), gun_bob);   /* recoil 5 frames after a shot */
+        if (item_ahead && fire_cd <= 9u) {              /* lowered: top row only, at the bottom */
+            for (uint8_t g = 0u; g < 3u; g++) {
+                scroll_sprite(g, 0, 16);
+                hide_sprite((uint8_t)(g + 3u));
+            }
+        }
         flip_req = 1u;                   /* VBL ISR flips LCDC.4 with the OAM push */
         images++;                        /* FPS: counted and shown by the VBL ISR */
         PROF(6);

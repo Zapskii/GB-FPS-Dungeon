@@ -9,7 +9,7 @@ riveted frame around the view, HUD compass and hearts. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build marker: the character in the middle of the HUD's bottom row (now
-**L**; 1–9 then letters) identifies the current build; it changes between
+**M**; 1–9 then letters) identifies the current build; it changes between
 hand-offs.
 
 ## Build
@@ -130,8 +130,13 @@ in the art lists). `draw_art()` places any `{w, h, tiles}` art by its
 bottom centre; `shoot()` uses the art width as the hit half-width.
 Projection is int32 forward/lateral (int16
 overflows at 768×127), screen x via a shift-subtract divide, culled by
-range and FOV, max 3 billboards, hidden when the wall at their column is
-nearer, feet placed on the floor line. Computed after the copy from the
+range and FOV, hidden when the wall at their column is nearer, feet placed
+on the floor line. Up to 3 enemies are drawn nearest first, and every
+billboard after the gun must fit a width budget of 7 sprites (DMG shows
+the first 10 OBJ per line in OAM order; the gun takes 3), so a far one is
+skipped whole instead of a near one losing columns. While an item is
+drawn behind the gun (and no shot is recoiling) the gun is lowered: its
+top row moves to the floor line and the bottom row is hidden. Computed after the copy from the
 same camera the view was rendered with, and pushed in the flip VBlank.
 
 ### Levels (`src/mazegen.h`, generated on the cartridge)
@@ -272,13 +277,10 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
 - ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
-  Still worth watching: an AI rebuild in an open room can take ~1 frame,
-  and the gun adds up to 3 sprites per scanline (10-per-line limit with
-  enemies/items).
-  The gun also hides items dead ahead at mid range (it sits on the
-  centre of the floor line).
+  Still worth watching: an AI rebuild in an open room can take ~1 frame.
 - Build L (enemy types, items, item size tiers) tested OK in mGBA and on
-  a physical DMG (2026-10-20).
+  a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
+  checked in gearboy.
 - Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
 - Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
   or reuse grunt art one tier larger as a "brute"), full wall textures.
