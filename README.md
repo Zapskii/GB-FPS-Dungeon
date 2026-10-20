@@ -12,7 +12,7 @@ hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build marker: the character in the middle of the HUD's bottom row (now
-**R**; 1–9 then letters) identifies the current build; it changes between
+**T**; 1–9 then letters) identifies the current build; it changes between
 hand-offs.
 
 ## Build
@@ -39,8 +39,10 @@ walk to the down-arrow (stairs) to descend. Hearts restore one heart (left
 lying if you're at full health), gems add to the gold count (HUD, next to
 the floor number), and a scroll reveals the whole floor on the automap.
 Grunts (dark blobs) walk the floor; bats (light wings, flying at eye
-level) move twice as fast and die in one shot. Each floor has 5 grunts
-(4 on floor 4) and floor-number bats, 8 at most. Enemies hurt on contact
+level) move twice as fast and die in one shot; brutes (a grunt drawn one
+size bigger, floors 3–4) move at half speed and take three shots. Floor n
+has n bats, 1 brute on floor 3 and 2 on floor 4, and grunts up to 8
+enemies (5, 5, 4, 2). Enemies hurt on contact
 (screen flashes inverted); one shot kills grunts on floors 1–2, two on
 floors 3–4 (a hit enemy flashes white and is stunned briefly); at 0 hearts
 the run ends on a GAME OVER screen (floor reached, kills, gold). Clear
@@ -115,9 +117,10 @@ mode-3 blocking; gearboy does not.
 from the player's cell (rebuilt only when that cell changes or a door
 opens, capped at 10 steps / 128 cells, ~1.3 KB RAM); each enemy walks
 downhill along corridors, centring on the cross axis before advancing so
-it never cuts corners (6 units a step, `ai_sp` = 12 for bats). Farther
-than 10 steps they idle. `etype[]`: 0 grunt, 1 bat.
-Hit points `ehp[]` (1, or 2 for grunts from floor 3); a non-lethal hit sets
+it never cuts corners (6 units a step, `ai_sp` = 12 for bats, 3 for
+brutes). Farther than 10 steps they idle. `etype[]`: 0 grunt, 1 bat,
+2 brute (`enemy_art` row 2 = the grunt tiers shifted one up, no new tiles).
+Hit points `ehp[]` (1, 2 for grunts from floor 3, 3 for brutes); a non-lethal hit sets
 `ehit[]` = 3 AI ticks of stun, drawn with OBP1 so the sprite flashes.
 Contact damage under 0.78 cell with a 60-tick cooldown, driving `hp`
 and the HUD hearts. `project()` is shared by billboards, item sprites and
@@ -160,7 +163,8 @@ and no flood-fill validation is needed), grunts and bats ≥ 6 steps away,
 into `vbuf` and uses `seen[]` and the back of `vbuf` as scratch (both are
 rewritten afterwards), so it costs no extra RAM.
 Map grammar: `#` wall, `=` wall 2, `D` door, `K` key, `S` stairs, `H`
-health, `G` gold, `M` map scroll, `P` start, `1`–`8` grunts, `B` bats. `load_level()` parses it into the
+health, `G` gold, `M` map scroll, `P` start, `1`–`8` grunts, `B` bats,
+`X` brutes. `load_level()` parses it into the
 collision map, items, spawns, and camera; keys reset per floor, HP carries,
 the floor-4 stairs show `win_screen()`, running out of hearts shows
 `game_over()`; both start a fresh run on new mazes.
@@ -244,6 +248,7 @@ tiles).
 | Variety | bats, gold and map items, item size tiers, sprite generator (build L) |
 | Sprite polish | gun lowers (M) then slides (P) over items; nearest-first, line-budgeted billboards (M) |
 | Floor banner | "FLOOR n" across the view for 1.5 s on arrival (build R) |
+| Brute | third enemy type: grunt art one size up, half speed, 3 HP, floors 3–4 (build T) |
 
 ## Constraints & next steps
 
@@ -291,8 +296,8 @@ tiles).
   cell once per image, sd_lu/od_avg inlined. Byte-identical to H on 5,300
   random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
-  marker shows blank: the font has no H (or B) - next markers T, U, V, Y
-  (I, L, M, P, R used).
+  marker shows blank: the font has no H (or B) - next markers U, V, Y
+  (I, L, M, P, R, T used).
 - ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
@@ -301,12 +306,11 @@ tiles).
   a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
   gun drop confirmed by the user. Build P (gun slides instead of jumping):
   confirmed working by the user (2026-10-20). Build R (floor banner):
-  checked in gearboy.
+  checked in gearboy. Build T (brute): checked in gearboy.
 - Free shared tiles: 240–243 (2 OBJ pairs or 4 BG tiles); 238–239 hold
   the banner's L and R.
 - Decided: stairs stay one-way (no going back up a floor).
-- Ideas not done: a third enemy type (needs ~12 tiles with mirrored art, or reuse
-  grunt art one tier larger as a "brute"), full wall textures.
+- Ideas not done: full wall textures.
   `textures.h` is dead.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
   enforce mode-3 VRAM blocking.

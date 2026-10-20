@@ -64,9 +64,10 @@ static const uint8_t art_stairs0[] = { 1u, 1u, 230u };
 static const uint8_t art_stairs1[] = { 1u, 1u, 232u };
 static const uint8_t art_stairs2[] = { 2u, 2u, 234u, 235u, 236u, 237u };
 
-/* [type][tier]: 0 grunt, 1 bat */
-static const uint8_t * const enemy_art[2][3] = {
-    { art_grunt0, art_grunt1, art_grunt2 }, { art_bat0, art_bat1, art_bat2 }
+/* [type][tier]: 0 grunt, 1 bat, 2 brute (grunt art one tier bigger) */
+static const uint8_t * const enemy_art[3][3] = {
+    { art_grunt0, art_grunt1, art_grunt2 }, { art_bat0, art_bat1, art_bat2 },
+    { art_grunt1, art_grunt2, art_grunt2 }
 };
 /* [kind][tier]: 0 key, 1 health, 2 gold, 3 map, 4 stairs */
 static const uint8_t * const item_art[5][3] = {

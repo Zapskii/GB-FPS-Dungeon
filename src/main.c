@@ -120,7 +120,7 @@ static uint8_t item_x[8], item_y[8], item_taken[8], item_kind[8];   /* kind: ite
 #define IT_MAP    3u
 #define IT_STAIRS 4u
 static uint8_t ehp[NENEMY], ehit[NENEMY];   /* enemy hits left, hit-flash ticks */
-static uint8_t etype[NENEMY];               /* enemy_art row: 0 grunt, 1 bat */
+static uint8_t etype[NENEMY];               /* enemy_art row: 0 grunt, 1 bat, 2 brute */
 
 
 #ifdef PROFILE
@@ -190,7 +190,7 @@ static void load_level(uint8_t n)
         } else if (ch == 'S') {
             stairs_x = (uint8_t)(i & 31u);
             stairs_y = (uint8_t)(i >> 5);
-        } else if ((ch >= '1' && ch <= '8') || ch == 'B') {
+        } else if ((ch >= '1' && ch <= '8') || ch == 'B' || ch == 'X') {
             if (ne < NENEMY) {
                 ex[ne] = (uint16_t)(((uint16_t)(i & 31u) << 8) + 128u);
                 ey[ne] = (uint16_t)(((uint16_t)(i >> 5) << 8) + 128u);
@@ -199,6 +199,9 @@ static void load_level(uint8_t n)
                 if (ch == 'B') {                 /* bat: fast, flies, one hit */
                     etype[ne] = 1u;
                     ehp[ne] = 1u;
+                } else if (ch == 'X') {          /* brute: slow, big, three hits */
+                    etype[ne] = 2u;
+                    ehp[ne] = 3u;
                 } else {
                     etype[ne] = 0u;
                     ehp[ne] = (n >= 2u) ? 2u : 1u;   /* floors 3-4: two hits */
@@ -355,7 +358,8 @@ static void enemy_tick(void)
         if (ehit[i]) ehit[i]--;                    /* stunned while flashing */
         else {                                     /* follow corridors toward the player */
             ai_sp = AI_SPEED;
-            if (etype[i]) ai_sp = AI_SPEED * 2u;   /* bats */
+            if (etype[i] == 1u) ai_sp = AI_SPEED * 2u;   /* bats */
+            if (etype[i] == 2u) ai_sp = AI_SPEED / 2u;   /* brutes */
             ai_step(i);
         }
         if (adx < 200 && ady < 200 && dmg_cd == 0u) {
@@ -574,7 +578,7 @@ static void sprite_update(void)
         pal = 0u;
         if (ehit[i]) pal = S_PALETTE;
         y = vfoot[best];                                /* grunts stand on the floor */
-        if (etype[i]) y = (uint8_t)(BAT_Y + bob[(uint8_t)((vbl_count >> 3) + i) & 7u]);
+        if (etype[i] == 1u) y = (uint8_t)(BAT_Y + bob[(uint8_t)((vbl_count >> 3) + i) & 7u]);
         si = draw_art(si, a, vx[best], y, pal);
     }
     /* items and stairs stand on the floor; OBP1 so colour 3 shows white */
@@ -915,7 +919,7 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('T') - FONT_BASE) << 4]);
     set_bkg_data(T_L, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
     set_bkg_data(T_R, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
     frame_init();

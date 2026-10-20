@@ -301,9 +301,10 @@ static const uint8_t spr_tiles[] = {{
 
 {chr(10).join(descs)}
 
-/* [type][tier]: 0 grunt, 1 bat */
-static const uint8_t * const enemy_art[2][3] = {{
-    {{ art_grunt0, art_grunt1, art_grunt2 }}, {{ art_bat0, art_bat1, art_bat2 }}
+/* [type][tier]: 0 grunt, 1 bat, 2 brute (grunt art one tier bigger) */
+static const uint8_t * const enemy_art[3][3] = {{
+    {{ art_grunt0, art_grunt1, art_grunt2 }}, {{ art_bat0, art_bat1, art_bat2 }},
+    {{ art_grunt1, art_grunt2, art_grunt2 }}
 }};
 /* [kind][tier]: {", ".join("%d %s" % (i, n) for i, (n, _) in enumerate(ITEMS))} */
 static const uint8_t * const item_art[{len(ITEMS)}][3] = {{
