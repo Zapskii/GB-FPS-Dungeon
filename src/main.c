@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     28u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     29u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -267,7 +267,10 @@ static void move(int16_t dx, int16_t dy)
     if (!c) cam_y = ny;
 }
 
-/* Item pickups and stairs, checked after movement. */
+/* Item pickups and stairs, checked after movement. Items are only
+ * rescanned on a new cell or a hearts change (a health item left lying at
+ * full hearts is taken once hurt); nothing else changes the outcome. */
+static uint8_t pick_hp;
 static void post_move(void)
 {
     uint8_t cx = (uint8_t)(cam_x >> 8), cy = (uint8_t)(cam_y >> 8);
@@ -281,8 +284,10 @@ static void post_move(void)
             seen[at] = 1u; seen[at + 1u] = 1u; seen[at + 2u] = 1u;
             at += 32u;
         }
+        pick_hp = 0xFFu;                 /* force the item scan below */
     }
 
+    if (hp != pick_hp)
     for (i = 0u; i < item_n; i++) {
         if (!item_taken[i]) {
             if (item_x[i] == cx) {
@@ -304,6 +309,7 @@ static void post_move(void)
             }
         }
     }
+    pick_hp = hp;
     if (stairs_x == cx) {
         if (stairs_y == cy) {
             uint8_t n = (uint8_t)(level_no + 1u);
@@ -317,15 +323,18 @@ static void post_move(void)
     }
 }
 
+/* Walk/strafe step per tick: dir * 16 / 128 = dir / 8 px (8.8), as a
+ * shift: SDCC turns the int16 multiply into a slow library call. */
+#define STEP(d) ((int16_t)((d) >> 3))
+
 static void handle_input(void)
 {
     uint8_t k = joypad();
-    int16_t sp = 16;
 
     if (k & (J_LEFT | J_RIGHT)) {
         if (k & J_B) {                            /* strafe */
-            int16_t sx = (int16_t)(((int16_t)cos8[(uint8_t)(cam_a + 64u)] * sp) >> 7);
-            int16_t sy = (int16_t)(((int16_t)sin8[(uint8_t)(cam_a + 64u)] * sp) >> 7);
+            int16_t sx = STEP(cos8[(uint8_t)(cam_a + 64u)]);
+            int16_t sy = STEP(sin8[(uint8_t)(cam_a + 64u)]);
             if (k & J_LEFT)  move((int16_t)-sx, (int16_t)-sy);
             else             move(sx, sy);
         } else {                                  /* turn */
@@ -333,16 +342,8 @@ static void handle_input(void)
             else             cam_a += 2u;
         }
     }
-    if (k & J_UP) {
-        int16_t mx = (int16_t)(((int16_t)cos8[cam_a] * sp) >> 7);
-        int16_t my = (int16_t)(((int16_t)sin8[cam_a] * sp) >> 7);
-        move(mx, my);
-    }
-    if (k & J_DOWN) {
-        int16_t mx = (int16_t)(((int16_t)cos8[cam_a] * sp) >> 7);
-        int16_t my = (int16_t)(((int16_t)sin8[cam_a] * sp) >> 7);
-        move((int16_t)-mx, (int16_t)-my);
-    }
+    if (k & J_UP) move(STEP(cos8[cam_a]), STEP(sin8[cam_a]));
+    if (k & J_DOWN) move((int16_t)-STEP(cos8[cam_a]), (int16_t)-STEP(sin8[cam_a]));
     /* gun sway while moving (one cycle ~0.7 s), snaps back at rest */
     if (k & (J_UP | J_DOWN)) gun_bob += 6u;
     else if ((k & J_B) && (k & (J_LEFT | J_RIGHT))) gun_bob += 6u;

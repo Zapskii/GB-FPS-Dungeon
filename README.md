@@ -14,7 +14,7 @@ around the view, HUD compass, hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **28**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **29**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
@@ -425,6 +425,15 @@ tiles).
   (25), BY ZAPSKI on the title (26), title attract mode and floor intros
   (27), 3 save slots with a picker (28). **Build 28 confirmed on a DMG
   (2026-10-20)**, which also covers build Y's speed changes.
+- Build 29 (C logic speed, step 1): measured over 2,000 random bench
+  views, the average image is ~627 lines and ~55% of views need 5 frames
+  (the start view, 617, is a cheap one). `post_move()` rescans items only
+  on a new cell or a hearts change (same-cell tick ~1,560 -> ~530 T);
+  walk/strafe steps use `>> 3` instead of an int16 multiply by 16 (same
+  values; `handle_input` ~5.5k -> ~4.0k T per walking tick). About 9-23
+  lines per image (standing / walking). `tools/sim/pickup_test.py`
+  checks pickups are unchanged. Next: sprite_update and enemy_tick C in
+  asm (~20 lines).
 - Ideas not done: two-colour wall textures, a ranged enemy or floor-4 boss, difficulty and
   a score screen, footstep/alert sounds.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
