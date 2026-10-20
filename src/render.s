@@ -11,16 +11,47 @@
         .area   _CODE
 
 STATR   = 0x41                  ; ldh offset of rSTAT
-FOG_NEAR = 3                    ; cells (r_dist hi): wall starts to dither
+FOG_NEAR = 3                    ; cells (perp hi byte): wall starts to dither
 FOG_FAR  = 6                    ; cells: wall one full shade darker
 
+
+; Per-ray arrays at 64-byte strides from r_top (ray_end walks them with one
+; pointer), then the ray direction tables, then imap with seen[] right after
+; it (seen[cell - imap] = cell + 1024). main.c declares these extern.
+        .area   _DATA
+_r_top::        .ds     64
+_r_bot::        .ds     64
+_r_zb::         .ds     64
+_r_wt::         .ds     64
+_r_clr::        .ds     64
+_r_hits::       .ds     128
+_r_dxs::        .ds     64
+_r_dys::        .ds     64
+_imap::         .ds     1024
+_seen::         .ds     1024
+c_desc:         .ds     8*16           ; per tile column, for copy_view: rows T,
+                                       ; core start, core end, B (pieces between
+                                       ; them), lo, hi, min top, max bot
+r_uni:          .ds     1              ; fill_col: this column's core is uniform
+
+; per-image and per-ray scalars, ldh-addressable
+        .area   _HRAM
+_h_lf::         .ds     4              ; log8 gridline fractions: x+, x-, y+, y-
+_h_map::        .ds     2              ; camera's map cell
+_h_ddx::        .ds     2              ; this ray's one-cell steps
+_h_ddy::        .ds     2
+_h_k::          .ds     1              ; this ray's column
+_h_mnt::        .ds     1              ; fill_col: the column's min top
+_h_mxb::        .ds     1              ;   and max bot
+
+        .area   _CODE
 
 ; ---------------------------------------------------------------
 ; Side distances: sd = f * rcp[a] >> 8, f = distance to the first
 ; gridline (1/256 cell), a = |ray component|. In the log domain that is
 ; one add: antilog[log8[f] + lrc[a] - 16] (~2% error, like the old mul8).
 ; log8[f] only depends on the camera and the ray's sign, so render_asm
-; fills r_lf once per image: x+, x-, y+, y-. f = 0 reads as f = 1
+; fills h_lf once per image: x+, x-, y+, y-. f = 0 reads as f = 1
 ; (log8[0] = 0), 1/256 cell off - invisible.
 ; ---------------------------------------------------------------
 
@@ -44,28 +75,50 @@ lf_pair:
 1$:     ld      a, #248                ; log8[256]
         ret
 
-; SD_LU: A = log8[f], C = a -> HL = f * rcp[a] >> 8. Clobbers A, DE.
-        .macro  SD_LU ?big
-        ld      hl, #_lrc
-        ld      e, c
-        ld      d, #0
-        add     hl, de
+; SD_LU: A = log8[f], C = a -> HL = f * rcp[a] >> 8. The 9-bit sum
+; log8[f] + lrc[a] indexes al_lo/al_hi (rtabs.s) as L = low byte,
+; H = page + carry; the tables already clamp sums below 16. Clobbers A.
+        .macro  SD_LU
+        ld      h, #>_lrc
+        ld      l, c
         add     a, (hl)
-        ld      e, a
-        ld      a, #0
-        adc     a, a
-        ld      d, a                   ; DE = index + 16 (0..481)
-        jr      NZ, big
-        ld      a, e
-        cp      #16
-        jr      NC, big
-        ld      e, #16                 ; below 1/256 cell: antilog[0]
-big:    ld      hl, #(_antilog - 32)
-        add     hl, de
-        add     hl, de
-        ld      a, (hl+)
+        ld      l, a
+        ld      a, #>_al_lo
+        adc     a, #0
+        ld      h, a
+        ld      a, (hl)
+        inc     h
+        inc     h                      ; al_hi = al_lo + 512
         ld      h, (hl)
         ld      l, a
+        .endm
+
+; RCPH dst: C = a -> HRAM dst = rcp[a]. Clobbers A, HL.
+        .macro  RCPH dst
+        ld      h, #>_rcp_lo           ; rcp_lo = page + 0x80, rcp_hi one page on
+        ld      a, c
+        or      #0x80
+        ld      l, a
+        ld      a, (hl)
+        ldh     (dst), a
+        inc     h
+        ld      a, (hl)
+        ldh     (dst+1), a
+        .endm
+
+; OD_AVG2 arr, DE = k: arr[k] = (arr[k-2] + arr[k+2]) / 2. Keeps DE.
+        .macro  OD_AVG2 arr
+        ld      hl, #(arr - 2)
+        add     hl, de
+        ld      a, (hl+)
+        inc     hl
+        inc     hl
+        inc     hl
+        add     a, (hl)
+        rra                            ; 9-bit sum / 2
+        dec     hl
+        dec     hl
+        ld      (hl), a
         .endm
 
 ; OD_AVG arr, DE = k: arr[k] = (arr[k-1] + arr[k+1]) / 2. Keeps DE.
@@ -81,78 +134,69 @@ big:    ld      hl, #(_antilog - 32)
         .endm
 
 ; ---------------------------------------------------------------
-; cast_ray: ray (_r_dx, _r_dy) from the camera -> _r_dist (perp, 8.8),
-; _r_wall, _r_side, _r_hit (map cell address).
+; ray_cs: cast column _r_k along (r_dxs[k], r_dys[k]). Stores r_top,
+; r_bot, r_zb (perp in 1/8 cells), r_wt, r_clr (base colour), r_hits and
+; marks seen[]. Returns DE = k.
 ; ---------------------------------------------------------------
-cast_ray:
-        ; x: C = |dx|, sdx pushed, ddx = rcp[|dx|]
-        ld      a, (_r_dx)
-        ld      c, a
-        ld      a, (_r_lf)
-        bit     7, c
+ray_cs:
+        ld      a, (_r_k)
+        ldh     (_h_k), a
+        ld      e, a
+        ld      d, #0
+        ld      hl, #_r_dxs
+        add     hl, de
+        ld      e, (hl)                ; E = dx
+        ld      bc, #64                ; r_dys follows r_dxs
+        add     hl, bc
+        ld      b, (hl)                ; B = dy
+        ; x: sdx (pushed) and ddx from C = |dx|
+        ld      c, e
+        ldh     a, (_h_lf)
+        bit     7, e
         jr      Z, 1$
         xor     a
-        sub     c
+        sub     e
         ld      c, a
-        ld      a, (_r_lf+1)
+        ldh     a, (_h_lf+1)
 1$:     SD_LU
         push    hl
-        ld      l, c
-        ld      h, #0
-        add     hl, hl
-        ld      de, #_rcp
-        add     hl, de
-        ld      a, (hl+)
-        ld      (_r_ddx), a
-        ld      a, (hl)
-        ld      (_r_ddx+1), a
+        RCPH    _h_ddx
         ; y
-        ld      a, (_r_dy)
-        ld      c, a
-        ld      a, (_r_lf+2)
-        bit     7, c
+        ld      c, b
+        ldh     a, (_h_lf+2)
+        bit     7, b
         jr      Z, 2$
         xor     a
-        sub     c
+        sub     b
         ld      c, a
-        ld      a, (_r_lf+3)
+        ldh     a, (_h_lf+3)
 2$:     SD_LU
         push    hl
-        ld      l, c
-        ld      h, #0
-        add     hl, hl
-        ld      de, #_rcp
-        add     hl, de
-        ld      a, (hl+)
-        ld      (_r_ddy), a
-        ld      a, (hl)
-        ld      (_r_ddy+1), a
-
-        ld      a, (_r_map)            ; HL = camera's map cell
-        ld      l, a
-        ld      a, (_r_map+1)
-        ld      h, a
-        pop     de                     ; DE = sdy
-        pop     bc                     ; BC = sdx
+        RCPH    _h_ddy
 
         ; one DDA loop per quadrant, so no sign tests per step. No step
         ; cap: mazegen walls rows/columns 0, 30 and 31, so every ray hits.
-        ld      a, (_r_dy)
-        rlca
-        jr      C, 3$
-        ld      a, (_r_dx)
-        rlca
-        jp      C, dda_mp
+        ldh     a, (_h_map)
+        ld      l, a
+        ldh     a, (_h_map+1)
+        ld      h, a                   ; HL = camera's map cell
+        bit     7, b
+        jr      NZ, 3$
+        bit     7, e
+        pop     de                     ; DE = sdy (pops keep the flags)
+        pop     bc                     ; BC = sdx
+        jp      NZ, dda_mp
         jp      dda_pp
-3$:     ld      a, (_r_dx)
-        rlca
-        jp      C, dda_mm
+3$:     bit     7, e
+        pop     de
+        pop     bc
+        jp      NZ, dda_mm
         jp      dda_pm
 
-; DDA xop, ylo, yhi: BC = sdx, DE = sdy, HL = map cell. x step is
-; xop hl, y step adds (yhi:ylo) = +-32 to HL. Exits to dda_hx / dda_hy
-; with A = the cell hit.
-        .macro  DDA xop, ylo, yhi
+; DDA xop, ylo, ycc, hop: BC = sdx, DE = sdy, HL = map cell. x step is
+; xop hl, y step adds ylo (+-32) to L and fixes H with hop unless ycc.
+; Exits to dda_hx / dda_hy with A = the cell hit.
+        .macro  DDA xop, ylo, ycc, hop, ?ny
 1$:     ld      a, b                   ; sdx < sdy ? step x : step y
         cp      d
         jr      C, 3$
@@ -160,26 +204,25 @@ cast_ray:
         ld      a, c
         cp      e
         jr      C, 3$
-2$:     ld      a, (_r_ddy)
+2$:     ldh     a, (_h_ddy)
         add     a, e
         ld      e, a
-        ld      a, (_r_ddy+1)
+        ldh     a, (_h_ddy+1)
         adc     a, d
         ld      d, a
         ld      a, l
         add     a, #ylo
         ld      l, a
-        ld      a, h
-        adc     a, #yhi
-        ld      h, a
-        ld      a, (hl)
+        jr      ycc, ny
+        hop     h
+ny:     ld      a, (hl)
         or      a
         jr      Z, 1$
         jp      dda_hy
-3$:     ld      a, (_r_ddx)
+3$:     ldh     a, (_h_ddx)
         add     a, c
         ld      c, a
-        ld      a, (_r_ddx+1)
+        ldh     a, (_h_ddx+1)
         adc     a, b
         ld      b, a
         xop     hl
@@ -189,62 +232,118 @@ cast_ray:
         jp      dda_hx
         .endm
 
-dda_pp: DDA     inc, 32, 0
-dda_mp: DDA     dec, 32, 0
-dda_pm: DDA     inc, 0xE0, 0xFF
-dda_mm: DDA     dec, 0xE0, 0xFF
+dda_pp: DDA     inc, 32, NC, inc
+dda_mp: DDA     dec, 32, NC, inc
+dda_pm: DDA     inc, 0xE0, C, dec
+dda_mm: DDA     dec, 0xE0, C, dec
 
+; DDA exits: A = cell hit (wall type 1..3, 3 = door), HL = its address.
+; perp = sd - dd of the axis just stepped.
 dda_hx:
-        ld      (_r_wall), a
-        ld      a, l
-        ld      (_r_hit), a
-        ld      a, h
-        ld      (_r_hit+1), a
-        xor     a
-        ld      (_r_side), a
-        ; dist = sdx - ddx
-        ld      a, (_r_ddx)
-        ld      e, a
+        push    hl                     ; hit cell
+        ld      l, a                   ; wt = cell (side 0)
+        ldh     a, (_h_ddx)
+        ld      h, a
         ld      a, c
-        sub     e
-        ld      (_r_dist), a
-        ld      a, (_r_ddx+1)
+        sub     h
         ld      e, a
+        ldh     a, (_h_ddx+1)
+        ld      h, a
         ld      a, b
-        sbc     a, e
-        ld      (_r_dist+1), a
-        jr      dda_seen
+        sbc     a, h
+        ld      d, a                   ; DE = sdx - ddx
+        ld      a, l
+        ld      c, #0                  ; base colour: x-facing 0, door 10
+        cp      #3
+        jr      NZ, ray_end
+        ld      c, #10
+        jr      ray_end
 dda_hy:
-        ld      (_r_wall), a
-        ld      a, l
-        ld      (_r_hit), a
-        ld      a, h
-        ld      (_r_hit+1), a
-        ld      a, #1
-        ld      (_r_side), a
-        ; dist = sdy - ddy
-        ld      a, (_r_ddy)
-        ld      c, a
+        push    hl
+        or      #0x80
+        ld      l, a                   ; wt = cell | side << 7
+        ldh     a, (_h_ddy)
+        ld      h, a
         ld      a, e
-        sub     c
-        ld      (_r_dist), a
-        ld      a, (_r_ddy+1)
-        ld      c, a
-        ld      a, d
-        sbc     a, c
-        ld      (_r_dist+1), a
-; automap: seen[hit - imap] = 1 (HL = hit cell). Interpolated odd columns
-; copy a neighbour's hit, so marking only cast rays covers every r_hits[k].
-dda_seen:
-        ld      a, l
-        sub     #<_imap
+        sub     h
         ld      e, a
-        ld      a, h
-        sbc     a, #>_imap
-        ld      d, a
-        ld      hl, #_seen
+        ldh     a, (_h_ddy+1)
+        ld      h, a
+        ld      a, d
+        sbc     a, h
+        ld      d, a                   ; DE = sdy - ddy
+        ld      a, l
+        ld      c, #5                  ; y-facing 5, door 10
+        cp      #0x83
+        jr      NZ, ray_end
+        ld      c, #10
+; A = wt, C = base colour, DE = perp (8.8), (SP) = hit cell.
+ray_end:
+        ld      b, a
+        push    bc
+        ; H = ht[min(perp >> 3, 1023)], zb = min(perp >> 5, 255)
+        ld      a, d
+        cp      #0x20
+        jr      NC, 1$
+        srl     d
+        rr      e
+        srl     d
+        rr      e
+        srl     d
+        rr      e                      ; DE = perp >> 3
+        ld      hl, #_ht
         add     hl, de
-        ld      (hl), #1
+        ld      c, (hl)                ; C = H (2..64)
+        ld      a, e
+        srl     d
+        rra
+        srl     d
+        rra                            ; A = perp >> 5 (D <= 3)
+        jr      2$
+1$:     ld      a, (_ht + 1023)
+        ld      c, a
+        ld      a, #0xFF
+2$:     ld      b, a                   ; B = zb
+        ld      a, #64
+        sub     c
+        srl     a
+        ld      e, a                   ; E = top
+        add     a, c
+        ld      d, a                   ; D = bot
+        ldh     a, (_h_k)
+        ld      hl, #_r_top
+        add     a, l
+        ld      l, a
+        adc     a, h
+        sub     l
+        ld      h, a                   ; HL = &r_top[k]
+        ld      (hl), e
+        ld      a, d
+        ld      de, #64
+        add     hl, de
+        ld      (hl), a                ; r_bot
+        add     hl, de
+        ld      (hl), b                ; r_zb
+        pop     bc
+        add     hl, de
+        ld      (hl), b                ; r_wt
+        add     hl, de
+        ld      (hl), c                ; r_clr
+        add     hl, de                 ; r_hits + k, + k again = &r_hits[k]
+        ldh     a, (_h_k)
+        ld      e, a                   ; DE = k
+        add     hl, de
+        pop     bc                     ; hit cell
+        ld      (hl), c
+        inc     hl
+        ld      (hl), b
+        ; automap: seen[hit - imap] = 1. Interpolated odd columns copy a
+        ; neighbour's hit, so marking only cast rays covers every r_hits[k].
+        ld      a, b
+        add     a, #4                  ; + 1024
+        ld      b, a
+        ld      a, #1
+        ld      (bc), a
         ret
 
 ; ---------------------------------------------------------------
@@ -263,14 +362,14 @@ _render_asm::
         ; per-image log8 of the camera's gridline fractions (see SD_LU)
         ld      a, (_cam_x)
         call    lf_pair
-        ld      (_r_lf), a
+        ldh     (_h_lf), a
         ld      a, b
-        ld      (_r_lf+1), a
+        ldh     (_h_lf+1), a
         ld      a, (_cam_y)
         call    lf_pair
-        ld      (_r_lf+2), a
+        ldh     (_h_lf+2), a
         ld      a, b
-        ld      (_r_lf+3), a
+        ldh     (_h_lf+3), a
         ; camera's map cell: imap + mapy*32 + mapx
         ld      a, (_cam_y+1)
         ld      l, a
@@ -287,9 +386,9 @@ _render_asm::
         ld      de, #_imap
         add     hl, de
         ld      a, l
-        ld      (_r_map), a
+        ldh     (_h_map), a
         ld      a, h
-        ld      (_r_map+1), a
+        ldh     (_h_map+1), a
         ; per-column ray direction hi bytes: r_dxs[k] = (rdx + k*stx) >> 8
         ; (the same 16-bit sums the old per-pass accumulators produced)
         ld      a, (_r_stx)
@@ -313,16 +412,84 @@ _render_asm::
         ld      bc, #_r_dys
         call    rd_tab
 
-        ; ---- even columns
+        ; ---- every 4th column, and 62
         xor     a
         ld      (_r_k), a
 ev_loop:
         call    ray_cs
         ld      a, (_r_k)
-        add     a, #2
+        add     a, #4
         ld      (_r_k), a
         cp      #64
         jr      C, ev_loop
+        ld      a, #62
+        ld      (_r_k), a
+        call    ray_cs
+
+        ; ---- columns 2, 6 .. 58: as the odd columns below, from k-2 and
+        ; k+2. Two rays that hit the same face of one cell leave no room for
+        ; another cell between them, so the rays between hit it too.
+        ld      a, #2
+        ld      (_r_k), a
+e2_loop:
+        ld      a, (_r_k)
+        ld      e, a
+        ld      d, #0
+        ld      hl, #(_r_wt - 2)
+        add     hl, de
+        ld      a, (hl+)               ; wt[k-2]
+        inc     hl
+        inc     hl
+        inc     hl
+        cp      (hl)                   ; wt[k+2]
+        jr      NZ, e2_cast
+        ld      hl, #(_r_hits - 4)
+        add     hl, de
+        add     hl, de
+        ld      a, (hl+)
+        ld      c, a                   ; hits[k-2]
+        ld      a, (hl+)
+        ld      b, a
+        inc     hl
+        inc     hl
+        inc     hl
+        inc     hl
+        inc     hl
+        inc     hl
+        ld      a, (hl+)               ; hits[k+2]
+        cp      c
+        jr      NZ, e2_cast
+        ld      a, (hl)
+        cp      b
+        jr      NZ, e2_cast
+        ld      hl, #_r_hits
+        add     hl, de
+        add     hl, de
+        ld      a, c
+        ld      (hl+), a
+        ld      (hl), b
+        ld      hl, #(_r_wt - 2)
+        add     hl, de
+        ld      a, (hl+)
+        inc     hl
+        ld      (hl), a
+        OD_AVG2 _r_top
+        OD_AVG2 _r_bot
+        OD_AVG2 _r_zb
+        ld      hl, #(_r_clr + 2)
+        add     hl, de
+        ld      a, (hl-)
+        dec     hl
+        ld      (hl), a
+        jr      e2_next
+e2_cast:
+        call    ray_cs
+e2_next:
+        ld      a, (_r_k)
+        add     a, #4
+        ld      (_r_k), a
+        cp      #62
+        jr      C, e2_loop
 
         ; ---- odd columns
         ld      a, #1
@@ -452,108 +619,6 @@ ed_dark:
 1$:     ld      (hl), a
         ret
 
-; Cast column _r_k along (r_dxs[k], r_dys[k]); store top/bot/zb/hits/wt.
-ray_cs:
-        ld      a, (_r_k)
-        ld      e, a
-        ld      d, #0
-        ld      hl, #_r_dxs
-        add     hl, de
-        ld      a, (hl)
-        ld      (_r_dx), a
-        ld      hl, #_r_dys
-        add     hl, de
-        ld      a, (hl)
-        ld      (_r_dy), a
-        call    cast_ray
-        ; H = ht[min(perp >> 3, 1023)]
-        ld      a, (_r_dist+1)
-        cp      #0x20
-        jr      C, rh_near
-        ld      hl, #(_ht + 1023)
-        jr      rh_have
-rh_near:
-        ld      d, a
-        ld      a, (_r_dist)
-        ld      e, a
-        srl     d
-        rr      e
-        srl     d
-        rr      e
-        srl     d
-        rr      e
-        ld      hl, #_ht
-        add     hl, de
-rh_have:
-        ld      c, (hl)                ; C = H (2..64)
-        ld      a, #64
-        sub     c
-        srl     a
-        ld      b, a                   ; B = top
-        add     a, c
-        ld      c, a                   ; C = bot
-        ld      a, (_r_k)
-        ld      e, a
-        ld      d, #0                  ; DE = k (kept to the end of the ray)
-        ld      hl, #_r_top
-        add     hl, de
-        ld      (hl), b
-        ld      hl, #_r_bot
-        add     hl, de
-        ld      (hl), c
-
-        ; zb = min(255, perp >> 5)
-        ld      a, (_r_dist+1)
-        cp      #0x20
-        jr      C, zb_s
-        ld      a, #0xFF
-        jr      zb_w
-zb_s:
-        ld      b, a
-        ld      a, (_r_dist)
-        swap    a
-        srl     a
-        and     #0x07                  ; lo >> 5
-        ld      c, a
-        ld      a, b
-        add     a, a
-        add     a, a
-        add     a, a                   ; hi << 3
-        or      c
-zb_w:
-        ld      hl, #_r_zb
-        add     hl, de
-        ld      (hl), a
-
-        ld      hl, #_r_hits           ; automap: the cell this ray saw
-        add     hl, de
-        add     hl, de
-        ld      a, (_r_hit)
-        ld      (hl+), a
-        ld      a, (_r_hit+1)
-        ld      (hl), a
-        ld      a, (_r_side)
-        rrca                           ; side -> bit 7
-        ld      b, a
-        ld      a, (_r_wall)
-        or      b
-        ld      hl, #_r_wt
-        add     hl, de
-        ld      (hl), a
-        ; base colour code (see the colour pass): door 10, else side * 5
-        ld      hl, #_r_clr
-        add     hl, de
-        and     #3
-        cp      #3
-        ld      a, #10
-        jr      Z, 1$
-        xor     a
-        bit     7, b
-        jr      Z, 1$
-        ld      a, #5
-1$:     ld      (hl), a
-        ret
-
 ; HL = 8.8 start, DE = step, BC = 64-byte table: table[k] = (HL + k*DE) >> 8
 rd_tab:
         .rept   64
@@ -641,6 +706,29 @@ skip:
 ; [maxtop,minbot) all-wall, [minbot,64) floor, then patch each ray's
 ; ragged ends with read-modify-write. Every top <= 31 < 33 <= every
 ; bot (ht >= 2), so the all-wall core is never empty.
+        ; next of a column's 4 values at HL: B = max, C = min so far
+        .macro  MINMAX ?l1, ?l2
+        ld      a, (hl+)
+        cp      b
+        jr      C, l1
+        ld      b, a
+        jr      l2
+l1:     cp      c
+        jr      NC, l2
+        ld      c, a
+l2:
+        .endm
+
+        ; next ray of the column at HL: C = 0 if it is a '=' wall
+        .macro  MORT ?ok
+        ld      a, (hl+)
+        and     #3
+        cp      #2
+        jr      NZ, ok
+        ld      c, #0
+ok:
+        .endm
+
 fill_go:
         xor     a
         ld      (_r_tc), a
@@ -665,50 +753,32 @@ fill_col:
         add     a, a
         ld      e, a
         ld      d, #0
-        ; maxtop
+        ; tops: maxtop, mintop
         ld      hl, #_r_top
         add     hl, de
         ld      a, (hl+)
-        ld      b, (hl)
-        cp      b
-        jr      NC, mt1
+        ld      b, a                   ; B = max
+        ld      c, a                   ; C = min
+        MINMAX
+        MINMAX
+        MINMAX
         ld      a, b
-mt1:
-        inc     hl
-        ld      b, (hl)
-        cp      b
-        jr      NC, mt2
-        ld      a, b
-mt2:
-        inc     hl
-        ld      b, (hl)
-        cp      b
-        jr      NC, mt3
-        ld      a, b
-mt3:
         ld      (_r_mxt), a
-        ; minbot
+        ld      a, c
+        ldh     (_h_mnt), a
+        ; bots: minbot, maxbot
         ld      hl, #_r_bot
         add     hl, de
         ld      a, (hl+)
-        ld      b, (hl)
-        cp      b
-        jr      C, mb1
-        ld      a, b
-mb1:
-        inc     hl
-        ld      b, (hl)
-        cp      b
-        jr      C, mb2
-        ld      a, b
-mb2:
-        inc     hl
-        ld      b, (hl)
-        cp      b
-        jr      C, mb3
-        ld      a, b
-mb3:
+        ld      b, a
+        ld      c, a
+        MINMAX
+        MINMAX
+        MINMAX
+        ld      a, c
         ld      (_r_mnb), a
+        ld      a, b
+        ldh     (_h_mxb), a
         ; pack the 4 colours into one lo/hi byte pair (ray 0 = bits 7-6)
         ld      hl, #_r_clr
         add     hl, de
@@ -727,6 +797,48 @@ mb3:
         ld      (_r_lo), a
         ld      a, e
         ld      (_r_hi), a
+        ; uniform: no '=' ray (mortar), so every core row is (lo, hi) and
+        ; fill leaves those rows to copy_view
+        ld      de, #(_r_wt - _r_clr - 4)
+        add     hl, de                 ; HL = &r_wt[4*tc] (the packing left r_clr + 4*tc + 4)
+        ld      c, #1
+        MORT
+        MORT
+        MORT
+        MORT
+        ld      a, c
+        ld      (r_uni), a
+        ; copy_view's descriptor (c_desc + 8*tc, see there): core [maxtop,
+        ; minbot) (empty at maxbot if not uniform), lo, hi, min top, max bot
+        ld      a, (_r_tc)
+        add     a, a
+        add     a, a
+        add     a, a
+        inc     a
+        add     a, #<c_desc
+        ld      l, a
+        ld      a, #>c_desc
+        adc     a, #0
+        ld      h, a                   ; HL = c_desc + 8*tc + 1
+        ldh     a, (_h_mxb)
+        dec     c
+        jr      Z, 1$
+        ld      (hl+), a               ; not uniform: core empty, at maxbot
+        ld      (hl+), a
+        jr      2$
+1$:     ld      a, (_r_mxt)
+        ld      (hl+), a
+        ld      a, (_r_mnb)
+        ld      (hl+), a
+2$:     inc     hl                     ; B: copy_view's
+        ld      a, (_r_lo)
+        ld      (hl+), a
+        ld      a, (_r_hi)
+        ld      (hl+), a
+        ldh     a, (_h_mnt)
+        ld      (hl+), a
+        ldh     a, (_h_mxb)
+        ld      (hl), a
 
         ; ceiling: rows [maxtop-1 .. 0], unrolled (ceil_blk)
         ld      a, (_r_mxt)
@@ -754,11 +866,22 @@ mb3:
 f_core:
         ; rows [maxtop, minbot): enter the unrolled fc_blk N = minbot-maxtop
         ; rows (3 bytes each) before fc_end; it falls through to fc_end.
+        ; A uniform column skips them: copy_view writes them (record R1).
         ld      a, (_r_mxt)
         ld      c, a
         ld      a, (_r_mnb)
         sub     c
         ld      c, a
+        ld      a, (r_uni)
+        or      a
+        jr      Z, 1$
+        ld      a, c
+        add     a, a
+        ld      e, a
+        ld      d, #0
+        add     hl, de
+        jp      fc_end
+1$:     ld      a, c
         add     a, a
         add     a, c                   ; 3N (<= 192)
         ld      c, a
@@ -1283,117 +1406,596 @@ cv_loop:
         ret
 
 ; ---------------------------------------------------------------
-; copy_view: like copy_vbuf (same STAT-poll + store body), but per tile
-; column only rows [t, b): t/b = the union of this image's span (min top,
-; max bot of the column's 4 rays, read from r_top/r_bot, still valid
-; after render_asm) and the span last copied into this bank (r_vh, set
-; by C's view_reset to [0, 64) = copy all). Rows outside a span are pure
+; copy_view: per tile column only rows [t, b): t/b = the union of this
+; image's span (min top, max bot of the column's 4 rays, from fill_col's
+; c_desc) and the span last copied into this bank (r_vh, set by C's
+; view_reset to [0, 64) = copy all). Rows outside a span are pure
 ; ceiling/floor pattern, the same in every column and image (fill writes
 ; rows [0,mintop) and [maxbot,64) only from ceil_blk/floor_blk; ragged
 ; patches and mortar stay inside [top, bot)), so they are already right
 ; in VRAM. r_vh: [0..15] bank 0x8000 tops, [16..31] bank 0x9000 tops,
-; [32..63] the bots. Uses r_tc (fill's, free by now).
+; [32..63] the bots. Needs the LCD on.
+;
+; A column is up to 3 pieces: V [t, core) from vbuf, U = the core rows
+; [maxtop, minbot), all (lo, hi), which fill left out of vbuf (no '='
+; ray; else the core is empty and vbuf has it), V [core end, b). Phase 1
+; (interrupts on) unites the spans and finds the band of lines the shadow
+; OAM's sprites cover; cw_next walks the pieces.
+; Phase 2 streams the pieces with IME = 0 and IE = STAT (mode-0 request;
+; no dispatch at IME = 0). A burst halts until mode 0 starts; mode 0 plus
+; the next mode 2 stay open 456 - mode 3 T: >= 167 (mode 3 <= 289 T) on
+; sprite lines, >= ~270 elsewhere (SCX = 0, window <= 6 T).
+; - V bursts preload 2 bytes, store at ~12, 28, then 20 T a byte; U
+;   bursts store a pair per 24 T (~12, 24, 36 ..).
+; - sync: poll for mode 2; mode 0 is then >= 172 T away, the halt runs
+;   <= ~224 T after mode 2 starts (mode 0 >= 252), burst: 3 V / 5 U pairs.
+; - chain: after a burst on line L, the next mode-0 request (line L + 1)
+;   is >= 339 T after L's, so arm straight away: sprite lines 3 V / 5 U
+;   pairs (halt ~300 T after L's request), others 6 V / 9 U (~228 /
+;   ~220 T bursts, halt ~400-430 of >= 443). LY is L or L + 1 here, so
+;   the band starts a line early.
+; - piece ends take the pairs left (fewer than a burst), then sync.
+; The first instruction after each halt is safe to run twice (halt bug),
+; so a halt that comes late only starts its burst late; tails start with
+; a nop. A chain reaching LY 143 syncs instead, so no IF write lands near
+; the VBL request.
+; - mode 1 seen while syncing: VBlank. The caller's IE back, ei (the VBL
+;   ISR runs now), plain polled pairs as copy_vbuf until VBlank ends.
+; Checked cycle by cycle against a PPU model with mode 3 random in
+; 172-289 T on sprite lines (scratch tool). The shadow OAM must not
+; change during the copy (sprite_update runs after it).
 ; ---------------------------------------------------------------
-_copy_view::
-        xor     a
-        ld      (_r_tc), a
-cw_col:
-        ld      a, (_r_tc)
-        add     a, a
-        add     a, a
-        ld      e, a
-        ld      d, #0                  ; DE = 4*tc
-        ld      hl, #_r_top            ; C = min top
-        add     hl, de
+LYR  = 0x44                     ; ldh offsets
+IFR  = 0x0F
+IER  = 0xFF
+
+        .area   _HRAM
+_h_seg::        .ds     2       ; cw_next: c_desc of the column
+_h_ie::         .ds     1       ; the caller's IE (no STAT: 0x48 has no handler)
+_h_nlo::        .ds     1       ; -(first line of the sprite band)
+_h_bnm1::       .ds     1       ; its length - 1
+_h_typ::        .ds     1       ; current record: 0 V, else U
+_h_bank::       .ds     1       ; r_dst hi: 0x80 or 0x90
+_h_cnt::        .ds     1       ; phase 1: columns left
+_h_stg::        .ds     1       ; cw_next: piece of the column
+_h_ctc::        .ds     1       ;   and the column
+        .area   _CODE
+
+        .macro  BYTE
         ld      a, (hl+)
-        cp      (hl)
-        jr      C, 1$
-        ld      a, (hl)
-1$:     inc     hl
-        cp      (hl)
-        jr      C, 2$
-        ld      a, (hl)
-2$:     inc     hl
-        cp      (hl)
-        jr      C, 3$
-        ld      a, (hl)
-3$:     ld      c, a
-        ld      hl, #_r_bot            ; B = max bot
-        add     hl, de
+        ld      (de), a
+        inc     e                      ; never wraps inside a 128-byte column
+        .endm
+        ; V: preload A, B, halt until mode 0, store them, then n BYTEs
+        .macro  BURST n
         ld      a, (hl+)
-        cp      (hl)
-        jr      NC, 4$
-        ld      a, (hl)
-4$:     inc     hl
-        cp      (hl)
-        jr      NC, 5$
-        ld      a, (hl)
-5$:     inc     hl
-        cp      (hl)
-        jr      NC, 6$
-        ld      a, (hl)
-6$:     ld      b, a
-        ; history: r_vh[bank*16 + tc] (top), +32 (bot); store new, merge old
-        ld      a, (_r_dst+1)
-        and     #0x10                  ; 0x80 -> 0, 0x90 -> 16
-        ld      e, a
-        ld      a, (_r_tc)
-        add     a, e
-        ld      e, a                   ; D = 0
-        ld      hl, #_r_vh
-        add     hl, de
-        ld      a, (hl)
+        ld      b, (hl)
+        inc     hl
+        halt
+        ld      (de), a
+        inc     e
+        ld      a, b
+        ld      (de), a
+        inc     e
+        .rept   n
+        BYTE
+        .endm
+        .endm
+        ; U: one (lo, hi) pair at HL
+        .macro  UPAIR
         ld      (hl), c
-        cp      c
-        jr      NC, 7$
-        ld      c, a                   ; C = min(new, old) top
-7$:     ld      de, #32
-        add     hl, de
-        ld      a, (hl)
+        inc     l                      ; never wraps inside a 128-byte column
         ld      (hl), b
-        cp      b
-        jr      C, 8$
-        ld      b, a                   ; B = max(new, old) bot
-8$:     ld      a, b
-        sub     c
-        ld      b, a                   ; B = pairs (> 0: top <= 31 < 33 <= bot)
-        ; DE = tc*128 + 2*t (2*t <= 126, no carry into D)
-        ld      a, (_r_tc)
-        srl     a
+        inc     l
+        .endm
+        ; U record end: n pairs
+        .macro  UTAIL n
+        halt
+        nop
+        .rept   n
+        UPAIR
+        .endm
+        jp      cw_segend
+        .endm
+
+_copy_view::
+        ; ---- this image's span per column united with the bank's old one
+        ; (r_vh) -> descriptor T, B (c_desc + 0, + 3)
+        ld      a, (_r_dst+1)
+        ldh     (_h_bank), a
+        and     #0x10                  ; 0x80 -> 0, 0x90 -> 16
+        add     a, #<_r_vh
+        ld      c, a
+        ld      a, #>_r_vh
+        adc     a, #0
+        ld      b, a                   ; BC = this bank's old tops (bots 32 on)
+        ld      hl, #(c_desc + 6)
+        ld      a, #16
+        ldh     (_h_cnt), a
+cw_col:
+        ld      a, (hl+)               ; min top
         ld      d, a
-        ld      a, #0
-        rra
+        ld      a, (bc)
+        ld      e, a                   ; old top
+        ld      a, d
+        ld      (bc), a
+        cp      e
+        jr      C, 1$
+        ld      d, e                   ; D = T
+1$:     ld      a, (hl)                ; max bot
+        push    hl
+        ld      hl, #32
+        add     hl, bc
+        ld      e, (hl)                ; old bot
+        ld      (hl), a
+        cp      e
+        jr      NC, 2$
+        ld      a, e                   ; A = B
+2$:     pop     hl
         ld      e, a
+        ld      a, l
+        sub     #7
+        ld      l, a
+        jr      NC, 3$
+        dec     h                      ; HL = this column's T
+3$:     ld      (hl), d
+        inc     hl
+        inc     hl
+        inc     hl
+        ld      (hl), e                ; B
+        ld      de, #11
+        add     hl, de                 ; next column's min top
+        inc     bc
+        ldh     a, (_h_cnt)
+        dec     a
+        ldh     (_h_cnt), a
+        jr      NZ, cw_col
+
+        ; ---- sprite band: lines [min y - 16, max y - 1] of the 8x16 OBJ
+        ; with OAM y in 1..159 (0 = hidden); none: line 200, so no LY hits
+        ld      hl, #_shadow_OAM
+        ld      bc, #0xFF00            ; B = min y, C = max y
+        ld      e, #40
+21$:    ld      a, (hl)
+        dec     a
+        cp      #159
+        jr      NC, 22$                ; y = 0 or >= 160: off screen
+        inc     a
+        cp      b
+        jr      NC, 23$
+        ld      b, a
+23$:    cp      c
+        jr      C, 22$
+        ld      c, a
+22$:    inc     hl
+        inc     hl
+        inc     hl
+        inc     hl
+        dec     e
+        jr      NZ, 21$
         ld      a, c
-        add     a, a
+        sub     b
+        jr      C, 24$                 ; no sprite
+        add     a, #16                 ; length - 1: max y - min y + 16 lines,
+        ldh     (_h_bnm1), a           ;   from a line early (chain's LY)
+        ld      a, #17
+        sub     b
+        jr      25$
+24$:    xor     a                      ; none: band = line 200 alone
+        ldh     (_h_bnm1), a
+        ld      a, #56
+25$:    ldh     (_h_nlo), a            ; -(min y - 17)
+
+        ; ---- phase 2
+        ld      a, #<c_desc
+        ldh     (_h_seg), a
+        ld      a, #>c_desc
+        ldh     (_h_seg+1), a
+        xor     a
+        ldh     (_h_stg), a
+        ldh     (_h_ctc), a
+        ldh     a, (IER)
+        ldh     (_h_ie), a
+        di
+        ld      a, #0x08
+        ldh     (STATR), a             ; STAT request on mode 0
+        ld      a, #0x02
+        ldh     (IER), a               ; only it ends a halt
+        call    cw_next                ; there is always one
+cw_sync:                               ; IME = 0: poll for mode 2 (or 1)
+        ldh     a, (STATR)
+        and     #3
+        cp      #2
+        jr      Z, cw_s2
+        dec     a
+        jr      NZ, cw_sync            ; mode 0 or 3
+        ; ---- mode 1: VBlank
+        ldh     a, (_h_ie)
+        ldh     (IER), a
+        ei
+        nop                            ; the VBL ISR runs here, before a poll
+cv_go:  ldh     a, (_h_typ)
+        or      a
+        jr      NZ, cu_vpoll
+cv_poll:                               ; V record
+        ldh     a, (STATR)
+        and     #3
+        jr      Z, cv_pair
+        dec     a
+        jr      Z, cv_pair             ; still VBlank
+cv_out: di                             ; mode 2/3 of line 0: back to halts
+        ld      a, #0x02
+        ldh     (IER), a
+        jr      cw_sync
+cv_pair:
+        ld      a, (hl+)
+        ld      (de), a
+        inc     e
+        ld      a, (hl+)
+        ld      (de), a
+        inc     e
+        dec     c
+        jr      NZ, cv_poll
+cv_next:
+        call    cw_next
+        jr      NZ, cv_go
+        jp      cw_end
+cu_vpoll:                              ; U record
+        ldh     a, (STATR)
+        and     #3
+        jr      Z, cu_vpair
+        dec     a
+        jr      NZ, cv_out
+cu_vpair:
+        UPAIR
+        dec     d
+        jr      NZ, cu_vpoll
+        jr      cv_next
+
+cw_s2:                                 ; mode 2: mode 0 >= 172 T away
+        ldh     a, (IFR)
+        and     #0xFD                  ; the last line's mode-0 request
+        ldh     (IFR), a
+        ldh     a, (_h_typ)
+        or      a
+        jr      Z, cw_3
+        ld      a, d
+        jp      cu_5
+cw_chain:                              ; right after a V burst on line L
+        ldh     a, (LYR)
+        cp      #143
+        jr      NC, cw_sync            ; VBlank next
+        ld      b, a
+        ldh     a, (IFR)
+        and     #0xFD
+        ldh     (IFR), a
+        ldh     a, (_h_nlo)
+        add     a, b
+        ld      b, a                   ; LY - band start
+        ldh     a, (_h_bnm1)
+        cp      b                      ; carry: outside the sprite band
+        jr      C, cw_6
+cw_3:   ld      a, c                   ; C = pairs left
+        cp      #3
+        jp      C, cw_tail
+        sub     #3
+        jr      Z, cw_3l
+        ld      c, a
+        BURST   4                      ; 3 pairs
+        jp      cw_chain
+cw_3l:  BURST   4
+        jp      cw_segend
+cw_6:   ld      a, c
+        cp      #6
+        jr      C, cw_tail
+        sub     #6
+        jr      Z, cw_6l
+        ld      c, a
+        BURST   10                     ; 6 pairs
+        jp      cw_chain
+cw_6l:  BURST   10
+        jp      cw_segend
+cw_tail:                               ; 1-5 pairs, fewer than the burst (<= 2 on sprite lines)
+        dec     a
+        jr      Z, 1$
+        dec     a
+        jr      Z, 2$
+        dec     a
+        jr      Z, 3$
+        dec     a
+        jr      Z, 4$
+        halt                           ; 5 (outside the band only)
+        nop
+        .rept   10
+        BYTE
+        .endm
+        jp      cw_segend
+4$:     halt                           ; 4 (outside the band only)
+        nop
+        .rept   8
+        BYTE
+        .endm
+        jp      cw_segend
+3$:     halt
+        nop
+        .rept   6
+        BYTE
+        .endm
+        jr      cw_segend
+2$:     halt
+        nop
+        .rept   4
+        BYTE
+        .endm
+        jr      cw_segend
+1$:     halt
+        nop
+        BYTE
+        BYTE
+cw_segend:
+        call    cw_next
+        jp      NZ, cw_sync
+cw_end:
+        xor     a
+        ldh     (STATR), a
+        ldh     a, (_h_ie)
+        ldh     (IER), a
+        ei
+        ret
+
+; U records: HL = dst, C = lo, B = hi, D = pairs left
+cu_chain:                              ; right after a U burst on line L
+        ldh     a, (LYR)
+        cp      #143
+        jp      NC, cw_sync            ; VBlank next
+        ld      e, a
+        ldh     a, (IFR)
+        and     #0xFD
+        ldh     (IFR), a
+        ldh     a, (_h_nlo)
+        add     a, e
+        ld      e, a                   ; LY - band start
+        ldh     a, (_h_bnm1)
+        cp      e                      ; carry: outside the sprite band
+        ld      a, d
+        jr      C, cu_9
+cu_5:   cp      #5                     ; A = pairs left
+        jp      C, cu_tail
+        sub     #5
+        ld      d, a
+        jr      Z, cu_5l
+        halt
+        .rept   5
+        UPAIR
+        .endm
+        jp      cu_chain
+cu_5l:  halt
+        .rept   5
+        UPAIR
+        .endm
+        jp      cw_segend
+cu_9:   cp      #9
+        jp      C, cu_tail
+        sub     #9
+        ld      d, a
+        jr      Z, cu_9l
+        halt
+        .rept   9
+        UPAIR
+        .endm
+        jp      cu_chain
+cu_9l:  halt
+        .rept   9
+        UPAIR
+        .endm
+        jp      cw_segend
+cu_tail:                               ; 1-8 pairs, fewer than the burst (<= 4 on sprite lines)
+        dec     a
+        jr      Z, cu_t1
+        dec     a
+        jr      Z, cu_t2
+        dec     a
+        jr      Z, cu_t3
+        dec     a
+        jr      Z, cu_t4
+        dec     a
+        jr      Z, cu_t5
+        dec     a
+        jp      Z, cu_t6
+        dec     a
+        jp      Z, cu_t7
+        UTAIL   8
+cu_t1:  UTAIL   1
+cu_t2:  UTAIL   2
+cu_t3:  UTAIL   3
+cu_t4:  UTAIL   4
+cu_t5:  UTAIL   5
+cu_t6:  UTAIL   6
+cu_t7:  UTAIL   7
+
+; next non-empty piece -> NZ: V: C = pairs, HL = src, DE = dst; U: D =
+; pairs, HL = dst, C = lo, B = hi (h_typ says which). Z after the last
+; column. Piece h_stg (0 V, 1 U, 2 V) of column h_ctc runs between the
+; c_desc boundaries at h_seg and h_seg + 1.
+cw_next:
+        ldh     a, (_h_seg)
+        ld      l, a
+        ldh     a, (_h_seg+1)
+        ld      h, a
+cn_loop:
+        ldh     a, (_h_stg)
+        cp      #3
+        jr      NZ, 1$
+        ld      de, #5                 ; B -> the next column's T
+        add     hl, de
+        ldh     a, (_h_ctc)
+        inc     a
+        cp      #16
+        ret     Z                      ; done
+        ldh     (_h_ctc), a
+        xor     a
+1$:     ld      d, a                   ; D = piece
+        inc     a
+        ldh     (_h_stg), a
+        ld      a, (hl+)               ; first row
+        ld      e, a
+        ld      a, (hl)                ; end row
+        sub     e
+        jr      Z, cn_loop             ; empty
+        ld      c, a                   ; pairs
+        ld      a, l
+        ldh     (_h_seg), a
+        ld      a, h
+        ldh     (_h_seg+1), a          ; the next piece starts here
+        ldh     a, (_h_ctc)            ; offset = (col & 1) << 7 | 2*row, col >> 1
+        rrca
+        ld      b, a
+        and     #0x80
+        sla     e
         add     a, e
         ld      e, a
-        ld      hl, #_vbuf
-        add     hl, de
-        push    hl
-        ld      a, (_r_dst)
+        ld      a, b
+        and     #0x7F
+        ld      b, a
+        dec     d
+        jr      Z, cn_u
+        ld      a, e                   ; V: src = vbuf + offset, dst = bank + offset
+        add     a, #<_vbuf
         ld      l, a
-        ld      a, (_r_dst+1)
+        ld      a, b
+        adc     a, #>_vbuf
         ld      h, a
-        add     hl, de
-        ld      d, h
-        ld      e, l                   ; DE = dst (even)
-        pop     hl                     ; HL = src
-cw_loop:
-        ldh     a, (STATR)
+        ldh     a, (_h_bank)
+        add     a, b
+        ld      d, a
+        xor     a
+        ldh     (_h_typ), a
+        or      #1                     ; NZ
+        ret
+cn_u:   ld      d, c                   ; U: pairs
+        inc     hl
+        inc     hl
+        ld      c, (hl)                ; lo (HL was at the core end)
+        inc     hl
+        ld      a, (hl)                ; hi
+        push    af
+        ldh     a, (_h_bank)
+        add     a, b
+        ld      h, a
+        ld      l, e                   ; HL = dst
+        pop     af
+        ld      b, a
+        ld      a, d
+        ldh     (_h_typ), a            ; nonzero
+        or      a                      ; NZ
+        ret
+
+; ---------------------------------------------------------------
+; check_view (make CHECK=1, hardware test): compare the bank copy_view
+; just wrote (r_dst) with this image: the uniform cores (c_desc) as
+; (lo, hi), vbuf everywhere else. Reads poll STAT like copy_vbuf. ->
+; A = mismatching row pairs (255 at most).
+; ---------------------------------------------------------------
+        .area   _HRAM
+_h_cn::         .ds     1       ; check_view: core rows of the column
+_h_clo::        .ds     1
+_h_chi::        .ds     1
+_h_e0::         .ds     1       ; expected pair (e1 must follow e0)
+_h_e1::         .ds     1
+_h_r0::         .ds     1
+_h_cerr::       .ds     1
+        .area   _CODE
+_check_view::
+        xor     a
+        ldh     (_h_cerr), a
+        ldh     (_h_ctc), a
+        ld      a, #<c_desc
+        ldh     (_h_seg), a
+        ld      a, #>c_desc
+        ldh     (_h_seg+1), a
+ck_col:
+        ldh     a, (_h_seg)
+        ld      l, a
+        ldh     a, (_h_seg+1)
+        ld      h, a
+        inc     hl
+        ld      a, (hl+)               ; core start
+        ld      c, a
+        ld      a, (hl+)               ; core end
+        sub     c
+        ldh     (_h_cn), a             ; core rows (0: none)
+        inc     hl
+        ld      a, (hl+)
+        ldh     (_h_clo), a
+        ld      a, (hl+)
+        ldh     (_h_chi), a
+        inc     hl
+        inc     hl                     ; the next column's c_desc
+        ld      a, l
+        ldh     (_h_seg), a
+        ld      a, h
+        ldh     (_h_seg+1), a
+        ldh     a, (_h_ctc)            ; offset = (col & 1) << 7, col >> 1
+        rrca
+        ld      d, a
+        and     #0x80
+        ld      e, a
+        ld      a, d
+        and     #0x7F
+        ld      d, a
+        ld      hl, #_vbuf
+        add     hl, de                 ; HL = src
+        ld      a, (_r_dst+1)
+        add     a, d
+        ld      d, a                   ; DE = dst
+        ld      b, #0                  ; row
+ck_row:
+        ld      a, b
+        sub     c                      ; row - core start
+        push    hl
+        ld      hl, #_h_cn
+        cp      (hl)
+        pop     hl
+        jr      NC, 1$
+        ldh     a, (_h_clo)            ; a core row
+        ldh     (_h_e0), a
+        ldh     a, (_h_chi)
+        ldh     (_h_e1), a
+        jr      2$
+1$:     ld      a, (hl+)
+        ldh     (_h_e0), a
+        ld      a, (hl-)
+        ldh     (_h_e1), a
+2$:     inc     hl
+        inc     hl
+3$:     ldh     a, (STATR)             ; mode 0/1: >= 80 T open
         and     #0x02
-        jr      NZ, cw_loop
-        ld      a, (hl+)
-        ld      (de), a
-        inc     e                      ; pairs never straddle 256 (even dst)
-        ld      a, (hl+)
-        ld      (de), a
+        jr      NZ, 3$
+        ld      a, (de)
+        ldh     (_h_r0), a
+        inc     e
+        ld      a, (de)
         inc     de
-        dec     b
-        jr      NZ, cw_loop
-        ld      a, (_r_tc)
+        push    hl
+        ld      hl, #_h_e1
+        cp      (hl)
+        jr      NZ, 4$
+        ldh     a, (_h_r0)
+        dec     l                      ; _h_e0
+        cp      (hl)
+        jr      Z, 5$
+4$:     ld      hl, #_h_cerr
+        inc     (hl)
+        jr      NZ, 5$
+        dec     (hl)                   ; stays at 255
+5$:     pop     hl
+        inc     b
+        bit     6, b
+        jr      Z, ck_row
+        ldh     a, (_h_ctc)
         inc     a
-        ld      (_r_tc), a
+        ldh     (_h_ctc), a
         cp      #16
-        jp      NZ, cw_col
+        jp      NZ, ck_col
+        ldh     a, (_h_cerr)
         ret

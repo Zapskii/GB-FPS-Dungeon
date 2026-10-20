@@ -106,12 +106,17 @@ static void gun_init(void)
     set_sprite_data(GUN_T0, 24u, gun_tiles);
 }
 
+/* gun_draw's last bob phase | firing << 3; 0xFF = redraw (OAM rewritten) */
+static uint8_t gun_shown = 0xFFu;
+
 /* firing: recoil frame; bob: walk phase 0..255 (0 = at rest) */
 static void gun_draw(uint8_t slot, uint8_t firing, uint8_t bob)
 {
     uint8_t i, x, y, t, b, s;
 
     b = (uint8_t)(bob >> 5);
+    if ((uint8_t)(b | (firing << 3)) == gun_shown) return;
+    gun_shown = (uint8_t)(b | (firing << 3));
     x = (uint8_t)(GUN_X + gun_bx[b]);
     y = (uint8_t)(GUN_Y - gun_by[b]);
     t = GUN_T0;

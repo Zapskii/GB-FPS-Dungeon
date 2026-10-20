@@ -63,23 +63,22 @@ void vbl_handler(void);
 void render_asm(void);
 void copy_vbuf(void);
 void copy_view(void);
+uint8_t check_view(void);              /* render.s, make CHECK=1 */
+extern volatile uint8_t chk_err;
 
 /* Scratch read/written by render.s — keep names in sync with the asm. */
-uint8_t r_dx, r_dy, r_side, r_wall;
-uint8_t r_ddx[2], r_ddy[2], r_dist[2], r_lf[4];
-uint8_t r_hit[2], r_k, r_map[2];
+uint8_t r_k;
 int16_t r_rdx, r_rdy, r_stx, r_sty;   /* column-0 ray dir + per-column step, 8.8 */
-uint8_t r_top[64], r_bot[64], r_clr[64], r_zb[64];
-uint8_t r_wt[64];            /* wall type 1..3 | side << 7 per column */
-uint8_t r_dxs[64], r_dys[64];  /* per-column ray direction hi bytes */
-uint8_t *r_hits[64];         /* map cell each ray hit (automap) */
 uint8_t r_tc, r_cb[2], r_pt[2], r_mxt, r_mnb, r_lo, r_hi;
 uint16_t r_dst;
 uint8_t r_vh[64];            /* copy_view: span last copied per bank+column */
 uint8_t vbuf[2048];          /* 128x64 bitmap in column-major tile order */
 
-uint8_t imap[1024];          /* char map -> collision/ray map */
-uint8_t seen[1024];          /* automap: cells walked next to or seen by a ray */
+/* Defined in render.s, which relies on their order (per-ray arrays at
+ * 64-byte strides, seen[] right after imap[]). */
+extern uint8_t r_top[64], r_bot[64], r_zb[64];
+extern uint8_t imap[1024];   /* char map -> collision/ray map */
+extern uint8_t seen[1024];   /* automap: cells walked next to or seen by a ray */
 static uint16_t seen_at = 0xFFFFu;
 uint16_t cam_x, cam_y;       /* 8.8, 256 = one cell */
 uint8_t  cam_a;              /* 0..255, 256 = full turn, 0 = +x */
@@ -347,14 +346,14 @@ static void handle_input(void)
 
 static void enemy_tick(void)
 {
+    uint8_t near;
+
     ai_update();
     for (uint8_t i = 0; i < NENEMY; i++) {
-        int16_t dx, dy, adx, ady;
         if (!ealive[i]) continue;
-        dx = (int16_t)(cam_x - ex[i]);
-        dy = (int16_t)(cam_y - ey[i]);
-        adx = dx < 0 ? (int16_t)-dx : dx;
-        ady = dy < 0 ? (int16_t)-dy : dy;
+        near = 0u;                                 /* |cam - e| < 200 on both axes, before the step */
+        if ((uint16_t)(cam_x - ex[i] + 199u) < 399u)
+            if ((uint16_t)(cam_y - ey[i] + 199u) < 399u) near = 1u;
         if (ehit[i]) ehit[i]--;                    /* stunned while flashing */
         else {                                     /* follow corridors toward the player */
             ai_sp = AI_SPEED;
@@ -362,7 +361,7 @@ static void enemy_tick(void)
             if (etype[i] == 2u) ai_sp = AI_SPEED / 2u;   /* brutes */
             ai_step(i);
         }
-        if (adx < 200 && ady < 200 && dmg_cd == 0u) {
+        if (near && dmg_cd == 0u) {
             if (hp) hp--;
             dmg_cd = 60u;
             flash_pal = 0x1Bu; flash_n = 6u;          /* hurt: invert */
@@ -384,14 +383,13 @@ static void enemy_tick(void)
  * in range, inside the 90 deg FOV and nearer than the wall at its column
  * (r_zb, 1/8 cells). Sets p_fwd (8.8 depth), p_x (screen px) and p_foot
  * (screen y of the floor under it). */
-static int16_t p_fwd;
-static uint8_t p_x, p_foot;
+int16_t p_fwd;                          /* project() results (src/math.s) */
+uint8_t p_x, p_foot;
 
-uint8_t udiv8(uint16_t n, uint8_t d);   /* src/math.s: n/d, (n>>8) < d */
-int16_t smul8(int16_t r, int8_t c);     /* src/math.s: |r| <= 255 */
+uint8_t project(uint16_t wx, uint16_t wy);   /* src/math.s */
 
 /* foot_tab[k] = min(HORIZON + 256/k, VIEW_Y0 + 64), k = fwd >> 5 in 3..80 */
-static const uint8_t foot_tab[81] = {
+const uint8_t foot_tab[81] = {
     96u, 96u, 96u, 96u, 96u, 96u, 96u, 96u, 96u, 92u, 89u, 87u, 85u, 83u, 82u, 81u,
     80u, 79u, 78u, 77u, 76u, 76u, 75u, 75u, 74u, 74u, 73u, 73u, 73u, 72u, 72u, 72u,
     72u, 71u, 71u, 71u, 71u, 70u, 70u, 70u, 70u, 70u, 70u, 69u, 69u, 69u, 69u, 69u,
@@ -399,41 +397,6 @@ static const uint8_t foot_tab[81] = {
     68u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u, 67u,
     67u
 };
-
-static uint8_t project(uint16_t wx, uint16_t wy)
-{
-    int16_t rx, ry, cs, sn, lat;
-    uint16_t n;
-    uint8_t off, k;
-
-    rx = (int16_t)wx - (int16_t)cam_x;
-    ry = (int16_t)wy - (int16_t)cam_y;
-    if (rx > 2560) return 0u;
-    if (rx < -2560) return 0u;
-    if (ry > 2560) return 0u;
-    if (ry < -2560) return 0u;
-    /* 1/16-cell precision in int16: |(r>>4)| <= 226 along any axis, *127 fits */
-    rx >>= 4;
-    ry >>= 4;
-    cs = cos8[cam_a];
-    sn = sin8[cam_a];
-    p_fwd = (int16_t)((smul8(rx, (int8_t)cs) + smul8(ry, (int8_t)sn)) >> 3);
-    if (p_fwd < 96) return 0u;
-    if (p_fwd > 2560) return 0u;
-    lat = (int16_t)((smul8(ry, (int8_t)cs) - smul8(rx, (int8_t)sn)) >> 3);
-    if (lat < 0) n = (uint16_t)-lat;
-    else         n = (uint16_t)lat;
-    if (n >= (uint16_t)p_fwd) return 0u;            /* outside the FOV */
-    off = udiv8((uint16_t)(n << 2), (uint8_t)(p_fwd >> 4));     /* 64*lat/fwd */
-    if (off > 60u) return 0u;
-    if (lat < 0) p_x = (uint8_t)(80u - off);
-    else         p_x = (uint8_t)(80u + off);
-    k = (uint8_t)(p_fwd >> 5);
-    if (r_zb[(uint8_t)(p_x - VIEW_X0) >> 1] < k) return 0u;
-    /* floor line: horizon + 32 px * (1 cell / fwd) */
-    p_foot = foot_tab[k];
-    return 1u;
-}
 
 static uint8_t enemy_tier(int16_t fwd)
 {
@@ -510,6 +473,7 @@ static void shoot(void)
  * Conservative: widths count as if every billboard shared one line. */
 #define SPR_LINE 7u
 static uint8_t item_ahead;              /* an item is drawn behind the gun: lower it */
+static uint8_t spr_used = MAX_SPR;      /* OAM slots sprite_update may have shown */
 static uint8_t gun_low, gun_low_shown;  /* lowered by px (0..16): target, in VRAM */
 
 /* Lowered gun: the idle art slides down d rows inside its own 6 tiles
@@ -590,7 +554,8 @@ static void sprite_update(void)
     }
     if (project((uint16_t)((stairs_x << 8) + 128u), (uint16_t)((stairs_y << 8) + 128u)))
         si = draw_item(si, IT_STAIRS, &room);
-    while (si < MAX_SPR) { move_sprite(si, 0u, 0u); si++; }
+    for (i = si; i < spr_used; i++) move_sprite(i, 0u, 0u);   /* the rest are hidden */
+    spr_used = si;
 }
 
 /* ---- automap (Select): explored cells, 2x2 px each, 64x64 in the middle
@@ -826,6 +791,7 @@ static void show_map(void)
     move_sprite(0u, (uint8_t)(VIEW_X0 + MAP_X0 + (cam_x >> 7) - 3u + 8u),
                     (uint8_t)(VIEW_Y0 + (cam_y >> 7) - 3u + 16u));
     for (si = 1u; si < MAX_SPR; si++) move_sprite(si, 0u, 0u);
+    gun_shown = 0xFFu;                   /* the arrow took slot 0 */
     flip_req = 1u;
     while (flip_req) ;
 
@@ -865,6 +831,7 @@ static void text_screen(const char *l1, const char *l2, const char *l3, const ch
     uint8_t i;
 
     for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
+    gun_shown = 0xFFu;
     banner_t = 0u;                       /* the ISR must not touch the text */
     banner_on = 0u;
     DISPLAY_OFF;
@@ -931,7 +898,7 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('U') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('V') - FONT_BASE) << 4]);
     set_bkg_data(T_L, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
     set_bkg_data(T_R, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
     frame_init();
@@ -1029,6 +996,12 @@ void main(void)
         PROF(3);
         r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;   /* hidden bank */
         copy_view();                     /* only rows that can differ */
+#ifdef CHECK
+        {
+            uint8_t e = check_view();
+            if (e > chk_err) chk_err = e;   /* worst image so far, shown by the VBL ISR */
+        }
+#endif
         PROF(4);
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
         PROF(5);

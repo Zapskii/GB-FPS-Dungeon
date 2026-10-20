@@ -16,6 +16,7 @@ volatile uint8_t vbl_count = 0u;
 volatile uint8_t flash_n = 0u, flash_pal = 0xE4u;   /* BGP override frames */
 volatile uint8_t flip_req = 0u;                       /* main: new image ready */
 volatile uint8_t images = 0u;                         /* main: views rendered */
+volatile uint8_t chk_err = 0u;                        /* make CHECK=1: worst VRAM mismatch */
 static uint8_t fps_t = 0u;
 
 #define WM(r,c) (*(uint8_t *)(0x9C00u + (r) * 32u + (c)))
@@ -41,5 +42,11 @@ void vbl_handler(void)
         if (n > 99u) n = 99u;
         WM(1, 17) = (uint8_t)(HUD_DIGIT0 + n / 10u);
         WM(1, 18) = (uint8_t)(HUD_DIGIT0 + n % 10u);
+#ifdef CHECK
+        n = chk_err;                     /* HUD row 1 left */
+        if (n > 99u) n = 99u;
+        WM(1, 1) = (uint8_t)(HUD_DIGIT0 + n / 10u);
+        WM(1, 2) = (uint8_t)(HUD_DIGIT0 + n % 10u);
+#endif
     }
 }
