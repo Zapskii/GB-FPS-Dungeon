@@ -493,6 +493,31 @@ static void shoot(void)
  * Conservative: widths count as if every billboard shared one line. */
 #define SPR_LINE 7u
 static uint8_t item_ahead;              /* an item is drawn behind the gun: lower it */
+static uint8_t gun_low, gun_low_shown;  /* lowered by px (0..16): target, in VRAM */
+
+/* Lowered gun: the idle art slides down d rows inside its own 6 tiles
+ * (gun.h order: top row pairs 0-2, bottom row 3-5), rows past the bottom
+ * drop off, so nothing spills onto the frame below the view. STAT-safe
+ * copies (GBDK set_sprite_data waits per byte), 192 bytes per change. */
+static void gun_shift(uint8_t d)
+{
+    static uint8_t col[64];             /* one 8x32 column, 2 bytes per row */
+    uint8_t c, k, n = (uint8_t)(d << 1), t;
+    const uint8_t *top, *bot;
+
+    for (c = 0u; c < 3u; c++) {
+        top = &gun_tiles[(uint16_t)c << 5];
+        bot = &gun_tiles[(uint16_t)(c + 3u) << 5];
+        for (k = 0u; k < 64u; k++) {
+            if (k < n) { col[k] = 0u; continue; }
+            t = (uint8_t)(k - n);
+            if (t < 32u) col[k] = top[t];
+            else         col[k] = bot[(uint8_t)(t - 32u)];
+        }
+        set_sprite_data((uint8_t)(GUN_T0 + (c << 1)), 2u, col);
+        set_sprite_data((uint8_t)(GUN_T0 + ((c + 3u) << 1)), 2u, col + 32u);
+    }
+}
 
 /* Item art at the last project(), if it fits the line budget. */
 static uint8_t draw_item(uint8_t si, uint8_t kind, uint8_t *room)
@@ -858,7 +883,7 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('M') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('P') - FONT_BASE) << 4]);
     frame_init();
     draw_frame();
 
@@ -933,6 +958,14 @@ void main(void)
                 }
                 pad_prev = pad;
                 if (fire_cd) fire_cd--;
+                /* gun slides down 1 px a tick while an item is behind it, back up 2 */
+                if (item_ahead) {
+                    if (gun_low < 16u) gun_low++;
+                } else if (gun_low > 2u) {
+                    gun_low -= 2u;
+                } else {
+                    gun_low = 0u;
+                }
             }
             tick++;
             if (++sec_frames == 60u) { sec_frames = 0u; secs++; }
@@ -949,13 +982,12 @@ void main(void)
         PROF(4);
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
         PROF(5);
-        gun_draw(0u, (uint8_t)(fire_cd > 9u), gun_bob);   /* recoil 5 frames after a shot */
-        if (item_ahead && fire_cd <= 9u) {              /* lowered: top row only, at the bottom */
-            for (uint8_t g = 0u; g < 3u; g++) {
-                scroll_sprite(g, 0, 16);
-                hide_sprite((uint8_t)(g + 3u));
-            }
+        if (gun_low != gun_low_shown) {
+            gun_shift(gun_low);
+            gun_low_shown = gun_low;
         }
+        /* recoil 5 frames after a shot, once the gun is back up */
+        gun_draw(0u, (uint8_t)(fire_cd > 9u && gun_low == 0u), gun_bob);
         flip_req = 1u;                   /* VBL ISR flips LCDC.4 with the OAM push */
         images++;                        /* FPS: counted and shown by the VBL ISR */
         PROF(6);

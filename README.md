@@ -9,7 +9,7 @@ riveted frame around the view, HUD compass and hearts. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build marker: the character in the middle of the HUD's bottom row (now
-**M**; 1–9 then letters) identifies the current build; it changes between
+**P**; 1–9 then letters) identifies the current build; it changes between
 hand-offs.
 
 ## Build
@@ -135,8 +135,11 @@ on the floor line. Up to 3 enemies are drawn nearest first, and every
 billboard after the gun must fit a width budget of 7 sprites (DMG shows
 the first 10 OBJ per line in OAM order; the gun takes 3), so a far one is
 skipped whole instead of a near one losing columns. While an item is
-drawn behind the gun (and no shot is recoiling) the gun is lowered: its
-top row moves to the floor line and the bottom row is hidden. Computed after the copy from the
+drawn behind the gun, the gun slides down 1 px per tick to 16 px (back up
+2 per tick): `gun_shift()` rewrites the idle art shifted inside its own 6
+tiles (STAT-safe copies, 192 bytes per change), so rows past the bottom
+drop off instead of spilling onto the frame. No recoil frame while
+lowered (the screen still flashes). Computed after the copy from the
 same camera the view was rendered with, and pushed in the flip VBlank.
 
 ### Levels (`src/mazegen.h`, generated on the cartridge)
@@ -280,6 +283,7 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   Still worth watching: an AI rebuild in an open room can take ~1 frame.
 - Build L (enemy types, items, item size tiers) tested OK in mGBA and on
   a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
+  gun drop confirmed by the user. Build P (gun slides instead of jumping):
   checked in gearboy.
 - Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
 - Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
