@@ -2,9 +2,12 @@
 
 A first-person Wolfenstein-style raycaster for the original Game Boy (DMG),
 built in GBDK-2020 with hand-written assembly for the renderer. Four
-corridor-maze levels, keys/doors/stairs, pathfinding billboard enemies,
-shooting with an on-screen gun, an automap, sound effects, a win screen, a
-riveted frame around the view, HUD compass and hearts. The
+randomly generated corridor-maze floors (one-way stairs down), keys and
+doors, two pathfinding billboard enemy types (grunts and bats), health,
+gold and map-scroll pickups that scale with distance, shooting with an
+on-screen gun that lowers over items, an automap, sound effects, title /
+game-over / win screens, a riveted frame around the view, HUD compass,
+hearts and gold. The
 3D view is a real 128×64 bitmap (64 rays, 2-px columns) drawn into tile
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
@@ -189,7 +192,8 @@ brick backdrop (BG tiles 244–254), drawn by `frame_draw()` from
 `draw_frame()`. `src/gun.h`: two-handed pistol, 3×2 sprites of 8×16 in OAM
 slots 0–5 (tiles 130–141 idle, 142–153 recoil with a white flash via OBP1),
 bottom edge on the viewport floor line; `gun_bob` advances while moving for
-a ±2 px sway, recoil shows while `fire_cd > 9`. Billboards start at slot 6.
+a ±2 px sway, recoil shows while `fire_cd > 9`. Billboards start at slot 6. Over an item the gun slides
+down inside its own tiles (`gun_shift()`, see Enemies and items).
 Art sources: `tools/gen_gun.py` (ASCII art → `src/gun.h` + preview PNG),
 `tools/gen_frame_tiles.py` and `tools/preview_frame.py` for the frame.
 
@@ -206,8 +210,9 @@ afterwards. The build marker glyph is copied into BG tile 255.
 ### HUD
 
 Window row 0: 5 hearts, `K n`, `F n`, gem + 2-digit gold (gem = BG tile
-183), compass `N E S W` with the facing cardinal inverted. Row 1: the build-marker digit and the FPS counter. Tiles at
-base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
+183), compass `N E S W` with the facing cardinal inverted. Row 1: the
+build marker and the FPS counter. Tiles at base 160 (`src/hud.h`, 23
+tiles).
 
 ## Milestones (measured with the gearboy profiler/MCP)
 
@@ -228,6 +233,11 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
 | Win screen | floor 4 → stats screen → new run (build 4) |
 | Sound + AI | APU effects, BFS pathfinding enemies (build 5) |
 | Display polish | frame, gun sprite, ceiling/floor gradients, wall fog (build 6) |
+| Screens + FPS | title/game-over screens, FPS counter, VBL-ISR flip (builds 7–A) |
+| Random mazes | on-cart generator per run, health pickups, 2-hit enemies (build C) |
+| Speed | adaptive rays, log side distances, PLAN.md waves 1–4: 6.5 → ~10.75 fps (builds D–I) |
+| Variety | bats, gold and map items, item size tiers, sprite generator (build L) |
+| Sprite polish | gun lowers (M) then slides (P) over items; nearest-first, line-budgeted billboards (M) |
 
 ## Constraints & next steps
 
@@ -275,8 +285,8 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   cell once per image, sd_lu/od_avg inlined. Byte-identical to H on 5,300
   random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
-  marker shows blank: the font has no H (or B) - use I, L, M, P, R, T,
-  U, V, Y next.
+  marker shows blank: the font has no H (or B) - next markers R, T, U,
+  V, Y (I, L, M, P used).
 - ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
@@ -286,8 +296,10 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   gun drop confirmed by the user. Build P (gun slides instead of jumping):
   confirmed working by the user (2026-10-20).
 - Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
-- Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
-  or reuse grunt art one tier larger as a "brute"), full wall textures.
+- Decided: stairs stay one-way (no going back up a floor).
+- Ideas not done: a "FLOOR n" banner on arrival (the HUD `F n` is easy to
+  miss), a third enemy type (needs ~12 tiles with mirrored art, or reuse
+  grunt art one tier larger as a "brute"), full wall textures.
   `textures.h` is dead.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
   enforce mode-3 VRAM blocking.
