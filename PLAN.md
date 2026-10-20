@@ -1,23 +1,40 @@
-# Plan after build V (speed round 3)
+# Plan after build Y (speed round 4)
 
 ## Where things stand (2026-10-20)
 
-- Build V (HUD marker V) is in the working tree, **not committed**. It is
-  described in README "Constraints & next steps" (Build V entry).
-- Start view in gearboy, `make PROFILE=1`: 4.05 frames per image (~14.8
-  fps). Lines per image: render 313, copy 198, logic 51, sprite_update 51,
-  rest ~10.
-- Hardware: floor 1 played on a DMG, works well. **Not yet run:** floors
-  3-4 (most sprites per line, the copy's worst case) and `make CHECK=1`
-  (HUD row 1 left must stay 00).
+- Build V committed (282f173) and confirmed on a DMG: floors 1-4 clean,
+  `make CHECK=1` stayed 00 while turning/walking/map.
+- Build Y committed (add3fa0): Wave 1 (billboard.s, ai_step asm, copy
+  handover) and Wave 2 S5 (odd-column walk) are in. Start view in
+  gearboy, `make PROFILE=1`: 4.08 -> ~4.00 frames per image (~15 fps).
+  Lines per image now: render ~308, copy ~199, logic ~46,
+  sprite_update ~49, rest ~4. **Not yet run on a DMG.**
+- Wave 2 S4 (ragged rows merged in fill) was implemented, measured
+  -3,038 T/view on 400 random views, and **reverted**: +6.3 lines/image
+  at the gearboy start view (near walls make almost every row ragged).
+- HUD marker: every single letter is used (V and Y were the last). The
+  next build must add a glyph to the font in main.c / the font table.
 - Test tools: `tools/sim/` (see its README). Setup:
   `python3 -m venv tools/sim/venv && tools/sim/venv/bin/pip install pyboy`.
+
+## Measurement lessons (2026-10-20)
+
+- The gearboy profiler counts scanlines (456 T) and its last image is
+  partial: use **64 images** (PROF_N), never ~20, or the per-image
+  average drifts by ~6%.
+- A render change must be judged at the **start view**, not on the
+  400-view bench mean (S4 is the counter-example). Ask agents for the
+  per-view spread.
+- Write a baseline snapshot of `src/` before handing out work; agents'
+  worktrees start at HEAD, not at the uncommitted working tree.
 
 ## Rules
 
 - **One file per agent per wave.** The main session integrates, builds,
-  runs the checks, measures in gearboy, bumps the HUD marker (next: Y)
-  and updates the README. Commit or push only when the user says so.
+  runs the checks, measures in gearboy, bumps the HUD marker (none
+  left: add a font glyph) and updates the README. Commit or push only
+  when the user says so. Snapshot `src/` as the baseline first; agent
+  worktrees start at HEAD, not at uncommitted changes.
 - Agents get their brief from the templates below and **return a diff
   summary and their own check results**, not a commit.
 - Code style: match render.s (lowercase mnemonics, `;` comments at column
@@ -44,12 +61,15 @@ taken at the start of the wave).
 Gearboy profile procedure: `make clean && make PROFILE=1`; `_prof_acc`
 address from dungeon.noi (WRAM area 6 offset = addr - 0xC000); load ROM,
 debug_continue, press/release start twice (title, then game), wait ~4 s
-for the banner, write 29 zero bytes at `_prof_acc`, continue, wait ~9 s,
+for the banner, write 29 zero bytes at `_prof_acc` (**write_memory pauses
+the emulator: always debug_continue afterwards**), continue, wait until
+the last byte reads 0x40 (64 images; at ~1 image/s that is a minute),
 read 29 bytes: 7 little-endian uint32 scanline totals (logic, render,
 seen, flip wait, copy, sprite_update, rest) over 64 images; /64 = lines
-per image, /154 = frames.
+per image, /154 = frames. A read taken before 64 images includes a
+partial image and reads ~6% high.
 
-## Wave 0 (main session, with the user)
+## Wave 0 (main session, with the user) — done
 
 1. Ask the user to run floors 3-4 and the `make CHECK=1` build on the
    DMG. If anything shows (stray pixels, CHECK > 00), stop and debug the
@@ -59,7 +79,7 @@ per image, /154 = frames.
 2. Commit build V when the user agrees (one commit, README already has
    the entry), then take the `--cmp` baseline from HEAD.
 
-## Wave 1 (parallel, 3 agents, one file each)
+## Wave 1 (parallel, 3 agents, one file each) — done in build Y
 
 **S1 `src/render.s`: chain copy pieces** (est. 15-25 copy lines)
 - Today each piece end (`cw_tail`, `cw_3l`/`cw_6l`, `cu_5l`/`cu_9l`,
@@ -91,15 +111,20 @@ per image, /154 = frames.
   rarely show sprites, so also add an interpreter A/B over random
   art/x/y/pal inputs, like the project() test).
 
-## Wave 2 (render.s, one at a time)
+## Wave 2 (render.s, one at a time) — S5 done in build Y; S4 rejected
 
-**S4 ragged edges in fill** (est. ~5-8k T)
+**S4 ragged edges in fill** (est. ~5-8k T) — implemented, reverted:
+-3,038 T/view on 400 random views but +6.3 lines/image at the start
+view. Only worth revisiting with a cheap "no ragged rows" fast path or a
+version tuned for many ragged rows.
 - `f_rag` (RTOP/RBOT macros) read-modify-writes each ray's rows above
   maxtop / below minbot: ~14.6k T per view. Write rows [mintop, maxtop)
   and [minbot, maxbot) once each, combining the ceiling/floor pattern
   with the wall colour of the rays that cover the row. Byte-identical.
 
-**S5 odd-column pass** (est. ~4-6k T)
+**S5 odd-column pass** (est. ~4-6k T) — done: od_loop 15,170 -> 11,884 T,
+-3,519 T/view, every bench view faster; start view render 319 -> 308
+lines/image.
 - `od_loop` ~15k T per view: one pointer walk instead of per-array
   address math (`e2_loop` does the same for k±2). Byte-identical.
 
