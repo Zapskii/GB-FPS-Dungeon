@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     30u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     31u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {

@@ -14,7 +14,7 @@ around the view, HUD compass, hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **30**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **31**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
@@ -441,6 +441,17 @@ tiles).
   rebuild; identical state on 200 random A/B states with
   `tools/sim/enemy_ab.py`). About 12 lines per image. After a game over
   the rest of that tick's enemies no longer step on the new floor.
+- Build 31 (cull): `project()`'s first check, a box of 10 cells around
+  the camera, now uses a per-image radius `pj_r` (2..10 cells):
+  render_asm tracks the highest wall top while filling and looks the
+  radius up in `cull_r[]` (`tools/gen_cull.py`, from `ht`: a visible
+  billboard is nearer than the wall at its column and inside the 90 deg
+  FOV, so within sqrt(2) x the farthest wall; 1.45 plus 1/4 cell margin).
+  1,000 bench views: sprite_update 18.8k -> 11.9k T, render +0.6k T, net
+  ~-6.3k T (~14 lines); outputs and OAM identical on 1,020 views. A model
+  stress test (300 random objects per view, 314k projections) culled none
+  of the 1,836 visible ones; `tools/sim/cull_check.py` reruns it.
+- Builds 29-31 confirmed on a physical DMG (2026-10-20).
 - Ideas not done: two-colour wall textures, a ranged enemy or floor-4 boss, difficulty and
   a score screen, footstep/alert sounds.
 - Test display-path changes in **mGBA or hardware** — gearboy does not

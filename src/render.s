@@ -43,6 +43,7 @@ _h_ddy::        .ds     2
 _h_k::          .ds     1              ; this ray's column
 _h_mnt::        .ds     1              ; fill_col: the column's min top
 _h_mxb::        .ds     1              ;   and max bot
+_h_gmx::        .ds     1              ; fill: highest wall top in the image
 
         .area   _CODE
 
@@ -731,6 +732,7 @@ ok:
 fill_go:
         xor     a
         ld      (_r_tc), a
+        ldh     (_h_gmx), a
 fill_col:
         ; column base = vbuf + tc*128
         ld      a, (_r_tc)
@@ -763,6 +765,12 @@ fill_col:
         MINMAX
         ld      a, b
         ld      (_r_mxt), a
+        ldh     a, (_h_gmx)
+        cp      b
+        jr      NC, fc_gmx
+        ld      a, b
+        ldh     (_h_gmx), a
+fc_gmx:
         ld      a, c
         ldh     (_h_mnt), a
         ; bots: minbot, maxbot
@@ -958,6 +966,17 @@ f_rag:
         ld      (_r_tc), a
         cp      #16
         jp      NZ, fill_col
+
+        ; project()'s box radius from the farthest wall (cull_r, tables.h)
+        ldh     a, (_h_gmx)
+        ld      e, a
+        ld      d, #0
+        ld      hl, #_cull_r
+        add     hl, de
+        ld      a, (hl)
+        ldh     (_pj_r), a
+        add     a, a
+        ldh     (_pj_r2), a
 
 ; one mortar column test: HL walks r_wt, C = k
         .macro  MOK M

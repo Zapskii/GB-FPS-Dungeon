@@ -83,13 +83,15 @@ _smul8::
         ret
 
 ; uint8_t project(uint16_t wx, uint16_t wy): a world point (8.8) through
-; the camera, as main.c documents it: 1 when it is within 10 cells on both
-; axes, in front (fwd 96..2560), inside the 90 deg FOV, at most 60 px off
+; the camera, as main.c documents it: 1 when it is within pj_r cells on
+; both axes (render_asm sets pj_r from the farthest wall: 2..10), in front (fwd 96..2560), inside the 90 deg FOV, at most 60 px off
 ; centre and nearer than the wall at its column (r_zb). Sets p_fwd (always,
 ; once computed), p_x, p_foot. DE = wx, BC = wy.
         .area   _HRAM
 pj_cs:  .ds     1
 pj_sn:  .ds     1
+_pj_r::  .ds     1                     ; box radius in cells, and twice it
+_pj_r2:: .ds     1
         .area   _CODE
 _project::
         ld      hl, #_cam_x            ; DE = rx >> 4
@@ -261,11 +263,13 @@ pj_no:  xor     a
         ret
 
 ; DE = r (|r| <= 2560 on both sides, else carry) -> DE = r >> 4 (arith)
-pj_q:   ld      a, d
-        add     a, #10
-        cp      #20
-        jr      C, 1$
-        jr      NZ, 2$                 ; hi byte 10 only with lo 0 (2560)
+pj_q:   ldh     a, (_pj_r2)
+        ld      l, a
+        ldh     a, (_pj_r)
+        add     a, d
+        cp      l
+        jr      C, 1$                  ; hi byte in [-r, r)
+        jr      NZ, 2$                 ; hi byte r only with lo 0
         ld      a, e
         or      a
         jr      NZ, 2$

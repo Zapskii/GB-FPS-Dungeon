@@ -111,6 +111,10 @@ const uint8_t ht[1024] = {
   2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
 };
 
+/* project()'s box radius in cells by the image's highest wall top (see
+   tools/gen_cull.py; regenerate when ht changes). */
+const uint8_t cull_r[32] = {2u, 2u, 2u, 3u, 3u, 3u, 3u, 3u, 3u, 3u, 3u, 3u, 3u, 3u, 3u, 4u, 4u, 4u, 4u, 5u, 5u, 5u, 6u, 7u, 7u, 8u, 10u, 10u, 10u, 10u, 10u, 10u};
+
 const uint8_t log8[256] = {
   0, 0, 31, 49, 62, 72, 80, 87, 93, 98, 103, 107, 111, 115, 118, 121,
   124, 127, 129, 132, 134, 136, 138, 140, 142, 144, 146, 147, 149, 151, 152, 154,
