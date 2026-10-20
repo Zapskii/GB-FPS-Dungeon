@@ -244,9 +244,17 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   render_asm -39.5k T, seen[] 0.15 -> 0.02; total 6.26 frames per image
   (~9.6 fps, HUD shows 09-10). Remaining per-label hot spots: wall-band
   loop f_cl ~28k T, mortar ~30k T, rd_step2 ~15k T.
+- Build I (wave 4): wall band as an unrolled `.rept` block (fc_blk, 24 T
+  per row), mortar only for '=' walls with one row address per column
+  (mo_col), ray directions from per-image tables (r_dxs/r_dys), camera
+  cell once per image, sd_lu/od_avg inlined. Byte-identical to H on 5,300
+  random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
+  total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
+  marker shows blank: the font has no H (or B) - use I, L, M, P, R, T,
+  U, V, Y next.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Builds 5–H are not yet checked on hardware: effects were tuned without
+- Builds 5–I are not yet checked on hardware: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
 - Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health

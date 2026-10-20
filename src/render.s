@@ -44,8 +44,8 @@ lf_pair:
 1$:     ld      a, #248                ; log8[256]
         ret
 
-; sd_lu: A = log8[f], C = a -> HL = f * rcp[a] >> 8. Clobbers A, DE.
-sd_lu:
+; SD_LU: A = log8[f], C = a -> HL = f * rcp[a] >> 8. Clobbers A, DE.
+        .macro  SD_LU ?big
         ld      hl, #_lrc
         ld      e, c
         ld      d, #0
@@ -55,18 +55,30 @@ sd_lu:
         ld      a, #0
         adc     a, a
         ld      d, a                   ; DE = index + 16 (0..481)
-        jr      NZ, 1$
+        jr      NZ, big
         ld      a, e
         cp      #16
-        jr      NC, 1$
+        jr      NC, big
         ld      e, #16                 ; below 1/256 cell: antilog[0]
-1$:     ld      hl, #(_antilog - 32)
+big:    ld      hl, #(_antilog - 32)
         add     hl, de
         add     hl, de
         ld      a, (hl+)
         ld      h, (hl)
         ld      l, a
-        ret
+        .endm
+
+; OD_AVG arr, DE = k: arr[k] = (arr[k-1] + arr[k+1]) / 2. Keeps DE.
+        .macro  OD_AVG arr
+        ld      hl, #(arr - 1)
+        add     hl, de
+        ld      a, (hl+)
+        inc     hl
+        add     a, (hl)
+        rra                            ; 9-bit sum / 2
+        dec     hl
+        ld      (hl), a
+        .endm
 
 ; ---------------------------------------------------------------
 ; cast_ray: ray (_r_dx, _r_dy) from the camera -> _r_dist (perp, 8.8),
@@ -83,7 +95,7 @@ cast_ray:
         sub     c
         ld      c, a
         ld      a, (_r_lf+1)
-1$:     call    sd_lu
+1$:     SD_LU
         push    hl
         ld      l, c
         ld      h, #0
@@ -104,7 +116,7 @@ cast_ray:
         sub     c
         ld      c, a
         ld      a, (_r_lf+3)
-2$:     call    sd_lu
+2$:     SD_LU
         push    hl
         ld      l, c
         ld      h, #0
@@ -116,21 +128,10 @@ cast_ray:
         ld      a, (hl)
         ld      (_r_ddy+1), a
 
-        ; HL = imap + mapy*32 + mapx
-        ld      a, (_cam_y+1)
+        ld      a, (_r_map)            ; HL = camera's map cell
         ld      l, a
-        ld      h, #0
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        ld      a, (_cam_x+1)
-        ld      e, a
-        ld      d, #0
-        add     hl, de
-        ld      de, #_imap
-        add     hl, de
+        ld      a, (_r_map+1)
+        ld      h, a
         pop     de                     ; DE = sdy
         pop     bc                     ; BC = sdx
 
@@ -259,7 +260,7 @@ dda_seen:
 ; new map cell or face draws its edge one shade darker (2, door 3).
 ; ---------------------------------------------------------------
 _render_asm::
-        ; per-image log8 of the camera's gridline fractions (see sd_lu)
+        ; per-image log8 of the camera's gridline fractions (see SD_LU)
         ld      a, (_cam_x)
         call    lf_pair
         ld      (_r_lf), a
@@ -270,54 +271,53 @@ _render_asm::
         ld      (_r_lf+2), a
         ld      a, b
         ld      (_r_lf+3), a
-        ; odd-pass start = rd0 + step, both passes advance by 2*step
+        ; camera's map cell: imap + mapy*32 + mapx
+        ld      a, (_cam_y+1)
+        ld      l, a
+        ld      h, #0
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+        add     hl, hl
+        ld      a, (_cam_x+1)
+        ld      e, a
+        ld      d, #0
+        add     hl, de
+        ld      de, #_imap
+        add     hl, de
+        ld      a, l
+        ld      (_r_map), a
+        ld      a, h
+        ld      (_r_map+1), a
+        ; per-column ray direction hi bytes: r_dxs[k] = (rdx + k*stx) >> 8
+        ; (the same 16-bit sums the old per-pass accumulators produced)
         ld      a, (_r_stx)
-        ld      l, a
+        ld      e, a
         ld      a, (_r_stx+1)
-        ld      h, a
+        ld      d, a
         ld      a, (_r_rdx)
-        ld      e, a
-        ld      a, (_r_rdx+1)
-        ld      d, a
-        push    hl
-        add     hl, de
-        ld      a, l
-        ld      (_r_ox), a
-        ld      a, h
-        ld      (_r_ox+1), a
-        pop     hl
-        add     hl, hl
-        ld      a, l
-        ld      (_r_s2x), a
-        ld      a, h
-        ld      (_r_s2x+1), a
-        ld      a, (_r_sty)
         ld      l, a
-        ld      a, (_r_sty+1)
+        ld      a, (_r_rdx+1)
         ld      h, a
-        ld      a, (_r_rdy)
+        ld      bc, #_r_dxs
+        call    rd_tab
+        ld      a, (_r_sty)
         ld      e, a
-        ld      a, (_r_rdy+1)
+        ld      a, (_r_sty+1)
         ld      d, a
-        push    hl
-        add     hl, de
-        ld      a, l
-        ld      (_r_oy), a
-        ld      a, h
-        ld      (_r_oy+1), a
-        pop     hl
-        add     hl, hl
-        ld      a, l
-        ld      (_r_s2y), a
-        ld      a, h
-        ld      (_r_s2y+1), a
+        ld      a, (_r_rdy)
+        ld      l, a
+        ld      a, (_r_rdy+1)
+        ld      h, a
+        ld      bc, #_r_dys
+        call    rd_tab
 
         ; ---- even columns
         xor     a
         ld      (_r_k), a
 ev_loop:
         call    ray_cs
-        call    rd_step2
         ld      a, (_r_k)
         add     a, #2
         ld      (_r_k), a
@@ -325,14 +325,6 @@ ev_loop:
         jr      C, ev_loop
 
         ; ---- odd columns
-        ld      a, (_r_ox)
-        ld      (_r_rdx), a
-        ld      a, (_r_ox+1)
-        ld      (_r_rdx+1), a
-        ld      a, (_r_oy)
-        ld      (_r_rdy), a
-        ld      a, (_r_oy+1)
-        ld      (_r_rdy+1), a
         ld      a, #1
         ld      (_r_k), a
 od_loop:
@@ -373,12 +365,9 @@ od_loop:
         add     hl, de
         ld      a, (hl+)
         ld      (hl), a
-        ld      hl, #_r_top
-        call    od_avg
-        ld      hl, #_r_bot
-        call    od_avg
-        ld      hl, #_r_zb
-        call    od_avg
+        OD_AVG  _r_top
+        OD_AVG  _r_bot
+        OD_AVG  _r_zb
         ld      hl, #(_r_clr + 1)
         add     hl, de
         ld      a, (hl-)
@@ -393,7 +382,6 @@ od_cast:
         inc     de
         call    ed_cmp                 ; edge between k and k+1
 od_next:
-        call    rd_step2
         ld      a, (_r_k)
         add     a, #2
         ld      (_r_k), a
@@ -464,11 +452,18 @@ ed_dark:
 1$:     ld      (hl), a
         ret
 
-; Cast column _r_k along (_r_rdx, _r_rdy); store top/bot/zb/hits/wt.
+; Cast column _r_k along (r_dxs[k], r_dys[k]); store top/bot/zb/hits/wt.
 ray_cs:
-        ld      a, (_r_rdx+1)
+        ld      a, (_r_k)
+        ld      e, a
+        ld      d, #0
+        ld      hl, #_r_dxs
+        add     hl, de
+        ld      a, (hl)
         ld      (_r_dx), a
-        ld      a, (_r_rdy+1)
+        ld      hl, #_r_dys
+        add     hl, de
+        ld      a, (hl)
         ld      (_r_dy), a
         call    cast_ray
         ; H = ht[min(perp >> 3, 1023)]
@@ -559,40 +554,14 @@ zb_w:
 1$:     ld      (hl), a
         ret
 
-; ray direction += 2 * step
-rd_step2:
-        ld      a, (_r_s2x)
-        ld      b, a
-        ld      a, (_r_rdx)
-        add     a, b
-        ld      (_r_rdx), a
-        ld      a, (_r_s2x+1)
-        ld      b, a
-        ld      a, (_r_rdx+1)
-        adc     a, b
-        ld      (_r_rdx+1), a
-        ld      a, (_r_s2y)
-        ld      b, a
-        ld      a, (_r_rdy)
-        add     a, b
-        ld      (_r_rdy), a
-        ld      a, (_r_s2y+1)
-        ld      b, a
-        ld      a, (_r_rdy+1)
-        adc     a, b
-        ld      (_r_rdy+1), a
-        ret
-
-; HL = byte array, DE = k: a[k] = (a[k-1] + a[k+1]) / 2. Keeps DE.
-od_avg:
+; HL = 8.8 start, DE = step, BC = 64-byte table: table[k] = (HL + k*DE) >> 8
+rd_tab:
+        .rept   64
+        ld      a, h
+        ld      (bc), a
+        inc     bc
         add     hl, de
-        dec     hl
-        ld      a, (hl+)
-        inc     hl
-        add     a, (hl)
-        rra                            ; 9-bit sum / 2
-        dec     hl
-        ld      (hl), a
+        .endm
         ret
 
 ; Ragged-patch rays (f_rag). DE walks r_top / r_bot, C = maxtop / minbot,
@@ -743,8 +712,7 @@ mb3:
         ; pack the 4 colours into one lo/hi byte pair (ray 0 = bits 7-6)
         ld      hl, #_r_clr
         add     hl, de
-        ld      b, #4
-pk_loop:
+        .rept   4
         ld      a, (hl+)
         rrca                           ; left lo
         rl      c
@@ -754,8 +722,7 @@ pk_loop:
         rl      c
         rrca                           ; right hi
         rl      e
-        dec     b
-        jr      NZ, pk_loop
+        .endm
         ld      a, c
         ld      (_r_lo), a
         ld      a, e
@@ -785,22 +752,34 @@ pk_loop:
         call    bg_go
         pop     hl
 f_core:
+        ; rows [maxtop, minbot): enter the unrolled fc_blk N = minbot-maxtop
+        ; rows (3 bytes each) before fc_end; it falls through to fc_end.
         ld      a, (_r_mxt)
         ld      c, a
         ld      a, (_r_mnb)
         sub     c
+        ld      c, a
+        add     a, a
+        add     a, c                   ; 3N (<= 192)
+        ld      c, a
+        ld      a, #<fc_end
+        sub     c
+        ld      c, a
+        ld      a, #>fc_end
+        sbc     a, #0
         ld      b, a
-        ld      a, (_r_lo)
-        ld      d, a
+        push    bc
         ld      a, (_r_hi)
         ld      e, a
-f_cl:
-        ld      a, d
+        ld      a, (_r_lo)
+        ret
+fc_blk:
+        .rept   64
         ld      (hl+), a
-        ld      a, e
-        ld      (hl+), a
-        dec     b
-        jr      NZ, f_cl
+        ld      (hl), e
+        inc     hl
+        .endm
+fc_end:
         ld      a, l
         ld      (_r_cb), a             ; row minbot: bottom patches start here
         ld      a, h
@@ -858,93 +837,89 @@ f_rag:
         cp      #16
         jp      NZ, fill_col
 
-; ---- '=' walls: dark mortar rows at 1/4, 1/2 and 3/4 of the wall height
-; (fractions of the projected height, so they converge with perspective).
-        xor     a
-        ld      (_r_k), a
-mo_loop:
-        ld      a, (_r_k)
-        ld      e, a
-        ld      d, #0
-        ld      hl, #_r_wt
-        add     hl, de
-        ld      a, (hl)
+; one mortar column test: HL walks r_wt, C = k
+        .macro  MOK M
+        ld      a, (hl+)
         and     #3
         cp      #2
-        jr      NZ, mo_next
-        ld      hl, #_r_top
-        add     hl, de
-        ld      b, (hl)                ; B = top
+        ld      b, #M
+        call    Z, mo_col
+        inc     c
+        .endm
+; one mortar row at HL: B = mask, C = ~mask; lo &= ~mask, hi |= mask
+        .macro  MOR
+        ld      a, (hl)
+        and     c
+        ld      (hl+), a
+        ld      a, (hl)
+        or      b
+        ld      (hl-), a
+        .endm
+
+; ---- '=' walls: dark mortar rows at 1/4, 1/2 and 3/4 of the wall height
+; (fractions of the projected height, so they converge with perspective).
+        ld      hl, #_r_wt
+        ld      c, #0                  ; C = k
+mo_loop:
+        MOK     0xC0
+        MOK     0x30
+        MOK     0x0C
+        MOK     0x03
+        bit     6, c
+        jr      Z, mo_loop
+        ret
+
+; B = mask of column C = k (an '=' wall): its 2 pixels -> colour 2 on rows
+; top + H/4, + H/2, + 3H/4 (H >= 8). Keeps BC, HL.
+mo_col:
+        push    hl
+        ld      e, c
+        ld      d, #0
         ld      hl, #_r_bot
         add     hl, de
         ld      a, (hl)
-        sub     b                      ; H
-        cp      #8
-        jr      C, mo_next             ; too small to show bricks
-        srl     a
-        srl     a
-        ld      c, a                   ; C = H / 4
-        ; column base = vbuf + (k >> 2) * 128
-        ld      a, e
-        srl     a
-        srl     a
-        srl     a
-        ld      h, a
-        ld      a, #0
-        rra
-        ld      l, a
-        push    de
-        ld      de, #_vbuf
+        ld      hl, #_r_top
         add     hl, de
-        pop     de
-        ld      a, l
-        ld      (_r_cb), a
-        ld      a, h
-        ld      (_r_cb+1), a
-        ; mask = 0xC0 >> 2 * (k & 3)
-        ld      a, e
-        and     #3
+        ld      d, (hl)                ; D = top
+        sub     d                      ; H
+        cp      #8
+        jr      C, mo_ret              ; too small to show bricks
+        and     #0xFC                  ; clears carry
+        rra
+        ld      e, a                   ; E = 2 * (H / 4): bytes per step
+        add     a, d
+        add     a, d
+        ld      l, a                   ; 2 * (top + H/4) (< 128)
+        ld      a, c
+        rrca
+        rrca
+        rrca                           ; (k & 7) << 5 | k >> 3
+        ld      h, a
+        and     #0x80                  ; (k >> 2 & 1) << 7
+        or      l
         ld      l, a
-        ld      a, #0xC0
-        inc     l
-mo_ms:
-        dec     l
-        jr      Z, mo_mh
-        srl     a
-        srl     a
-        jr      mo_ms
-mo_mh:
-        ld      (_r_m), a
+        ld      a, h
+        and     #7                     ; k >> 3
+        ld      h, a
+        ld      a, l
+        add     a, #<_vbuf
+        ld      l, a
+        ld      a, h
+        adc     a, #>_vbuf
+        ld      h, a                   ; HL = vbuf + (k>>2)*128 + 2*(top+H/4)
+        ld      d, #0
         ld      a, b
-        add     a, c
-        call    mo_row
-        add     a, c
-        call    mo_row
-        add     a, c
-        call    mo_row
-mo_next:
-        ld      a, (_r_k)
-        inc     a
-        ld      (_r_k), a
-        cp      #64
-        jp      C, mo_loop
-        ret
-
-; A = pixel row: this column's 2 pixels -> colour 2. Keeps AF, BC, DE.
-mo_row:
-        push    af
-        push    de
-        call    rg_addr
-        ld      a, (_r_m)
-        ld      d, a
         cpl
-        and     (hl)
-        ld      (hl+), a
-        ld      a, (hl)
-        or      d
-        ld      (hl), a
-        pop     de
-        pop     af
+        push    bc
+        ld      c, a                   ; C = ~mask
+        MOR
+        add     hl, de
+        MOR
+        add     hl, de
+        MOR
+        pop     bc
+mo_ret:
+        pop     hl
         ret
 
 ; Jump to the ceiling/floor block entry in BC with the register contract
@@ -1274,18 +1249,6 @@ fr63:
 fr_end:
         ret
 ; ---- end generated ----
-
-; A = pixel row -> HL = column base + 2*row. Clobbers DE.
-rg_addr:
-        add     a, a
-        ld      e, a
-        ld      d, #0
-        ld      a, (_r_cb)
-        ld      l, a
-        ld      a, (_r_cb+1)
-        ld      h, a
-        add     hl, de
-        ret
 
 ; ---------------------------------------------------------------
 ; copy_vbuf: 2048 bytes _vbuf -> VRAM at _r_dst (0x8000 or 0x9000).
