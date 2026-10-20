@@ -271,12 +271,14 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   U, V, Y next.
 - ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking). Builds 5–I are not yet checked on a real DMG: effects were tuned without
-  listening, an AI rebuild in an open room can take ~1 frame, and the gun
-  adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
+- Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
+  Still worth watching: an AI rebuild in an open room can take ~1 frame,
+  and the gun adds up to 3 sprites per scanline (10-per-line limit with
+  enemies/items).
   The gun also hides items dead ahead at mid range (it sits on the
   centre of the floor line).
-- Build L (enemy types, items, item size tiers) tested OK in mGBA (2026-10-20).
+- Build L (enemy types, items, item size tiers) tested OK in mGBA and on
+  a physical DMG (2026-10-20).
 - Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
 - Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
   or reuse grunt art one tier larger as a "brute"), full wall textures.
