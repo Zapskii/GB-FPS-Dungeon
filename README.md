@@ -420,6 +420,10 @@ tiles).
 - Free shared tiles: 240–243 (2 OBJ pairs or 4 BG tiles); 238–239 hold
   the banner's L and R.
 - Decided: stairs stay one-way (no going back up a floor).
+- Builds 25-28 (HUD shows the build number from 25): battery saves
+  (25), BY ZAPSKI on the title (26), title attract mode and floor intros
+  (27), 3 save slots with a picker (28). **Build 28 confirmed on a DMG
+  (2026-10-20)**, which also covers build Y's speed changes.
 - Ideas not done: full wall textures.
   `textures.h` is dead.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
