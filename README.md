@@ -276,7 +276,7 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
   The gun also hides items dead ahead at mid range (it sits on the
   centre of the floor line).
-- Build L (enemy types, items, item size tiers): checked in gearboy only.
+- Build L (enemy types, items, item size tiers) tested OK in mGBA (2026-10-20).
 - Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
 - Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
   or reuse grunt art one tier larger as a "brute"), full wall textures.
