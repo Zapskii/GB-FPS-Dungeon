@@ -5,14 +5,15 @@ built in GBDK-2020 with hand-written assembly for the renderer. Four
 randomly generated corridor-maze floors (one-way stairs down), keys and
 doors, two pathfinding billboard enemy types (grunts and bats), health,
 gold and map-scroll pickups that scale with distance, shooting with an
-on-screen gun that lowers over items, an automap, sound effects, title /
+on-screen gun that lowers over items, an automap, sound effects and a
+~64 s background music loop (B on the map mutes it), title /
 game-over / win screens, a riveted frame around the view, HUD compass,
 hearts and gold. The
 3D view is a real 128×64 bitmap (64 rays, 2-px columns) drawn into tile
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build marker: the character in the middle of the HUD's bottom row (now
-**T**; 1–9 then letters) identifies the current build; it changes between
+**U**; 1–9 then letters) identifies the current build; it changes between
 hand-offs.
 
 ## Build
@@ -178,7 +179,10 @@ cell) plus the wall cell every ray hit (`r_hits[64]`, stored by render.s).
 stairs white, unexplored black), copies and flips like a normal frame, and
 shows the player as a white arrow sprite: the one direction needed is
 copied from `arrow_tiles` (8 directions) into OBJ pair 154–155 each time.
-Cleared on level load.
+Cleared on level load. While the map is up, the font is loaded over the
+hidden sprite tiles (184–197) and "PRESS B" / "MUSIC ON|OFF" are drawn on
+BG rows 13–14 with `banner()`; B toggles music, and on close
+`frame_draw()` restores the bricks and the 14 sprite tiles are reloaded.
 
 ### Sound (`src/sfx.h`)
 
@@ -186,8 +190,23 @@ Fire-and-forget APU effects, one const table row each (NR10–14 for the
 ch1 square/sweep, NR41–44 for ch4 noise); hardware length/envelope ends
 them, no per-frame driver. SHOOT, HURT, KEY (also health), DOOR, STAIRS,
 KILL, HIT. Effects
-on the same channel cut each other off; ch2/ch3 are free. Note: gearboy's
-IO memory view shows stale NR51/NR52 values, so check audio by ear.
+on the same channel cut each other off; ch2/ch3 belong to the music.
+`sfx_init` also loads the triangle wave into wave RAM for the bass. Note:
+gearboy's IO memory view shows stale NR51/NR52 values; its routed
+`get_apu_status` tool reads them correctly.
+
+### Music (`src/music.h`)
+
+`music_tick()` runs from the VBL ISR (constant tempo whatever the render
+rate): ch2 square melody, ch3 triangle bass, 8 frames per step. Tracker
+layout: a note-name enum (`A4`, `Gs4`, `_` = no trigger), 16-step
+patterns in `mus_lead[]` / `mus_bass[]` (bass via a `BASS()` macro), and
+`mus_order[]` of {lead, bass} pairs: intro, A, A', B, C, A, B, A' in A
+minor, 30 entries ≈ 64 s, ~600 bytes. `mus_period[]` holds ch3 periods
+C2..C6; ch2 plays an octave higher for the same value, so lead notes read
+`mus_period[n - 13]` (lead range C3..C6). Hardware envelope/length end
+each note, no per-frame state beyond the step counter. To mute, the map
+toggles NR51 bits for ch2+ch3 (`^= 0x66`); the song keeps advancing.
 
 ### Frame and gun
 
@@ -249,6 +268,7 @@ tiles).
 | Sprite polish | gun lowers (M) then slides (P) over items; nearest-first, line-budgeted billboards (M) |
 | Floor banner | "FLOOR n" across the view for 1.5 s on arrival (build R) |
 | Brute | third enemy type: grunt art one size up, half speed, 3 HP, floors 3–4 (build T) |
+| Music | ~64 s tracker-style loop on ch2/ch3 from the VBL ISR, B on the map toggles it (build U) |
 
 ## Constraints & next steps
 
@@ -296,8 +316,8 @@ tiles).
   cell once per image, sd_lu/od_avg inlined. Byte-identical to H on 5,300
   random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
-  marker shows blank: the font has no H (or B) - next markers U, V, Y
-  (I, L, M, P, R, T, U used).
+  marker shows blank: the font has no H (B was added in U) - next
+  markers V, Y (I, L, M, P, R, T, U used).
 - ROM: ~22 KB of 32 KB used (no MBC). Saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
