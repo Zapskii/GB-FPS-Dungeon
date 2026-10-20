@@ -14,7 +14,7 @@ around the view, HUD compass, hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **29**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **30**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
@@ -432,8 +432,15 @@ tiles).
   walk/strafe steps use `>> 3` instead of an int16 multiply by 16 (same
   values; `handle_input` ~5.5k -> ~4.0k T per walking tick). About 9-23
   lines per image (standing / walking). `tools/sim/pickup_test.py`
-  checks pickups are unchanged. Next: sprite_update and enemy_tick C in
-  asm (~20 lines).
+  checks pickups are unchanged.
+- Build 30 (step 2, asm): `scan_enemies`/`scan_items` collect project()
+  results into two `vis_t` arrays for sprite_update (18.4k -> 15.6k T;
+  OAM identical on 408 bench views, 28 with billboards); `enemy_pass`
+  runs the per-enemy contact/stun/speed/ai_step loop and enemy_tick
+  applies contact damage once after it (26.1k -> 23.3k T with a BFS
+  rebuild; identical state on 200 random A/B states with
+  `tools/sim/enemy_ab.py`). About 12 lines per image. After a game over
+  the rest of that tick's enemies no longer step on the new floor.
 - Ideas not done: two-colour wall textures, a ranged enemy or floor-4 boss, difficulty and
   a score screen, footstep/alert sounds.
 - Test display-path changes in **mGBA or hardware** — gearboy does not

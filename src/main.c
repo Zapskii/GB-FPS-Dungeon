@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     29u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     30u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -351,30 +351,123 @@ static void handle_input(void)
 }
 
 
+/* AI step for every live enemy (sdcccall 1): note contact (|cam - e| <
+ * 200 on both axes, before the step), then count down a hit stun or step
+ * with ai_sp = AI_SPEED (6), x2 for bats, /2 for brutes. Returns non-zero
+ * if any enemy was in contact. Literals mirror NENEMY and AI_SPEED (the
+ * preprocessor would mangle 8u in asm). */
+static uint8_t enemy_pass(void) __naked
+{
+    __asm
+    ld   bc, #0                 ; b = contact, c = enemy
+1$: ld   hl, #_ealive
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   a, (hl)
+    or   a, a
+    jp   z, 9$
+    ld   a, c                   ; (uint16_t)(cam_x - ex[i] + 199) < 399
+    add  a, a
+    ld   e, a
+    ld   d, #0
+    ld   hl, #_ex
+    add  hl, de
+    ld   a, (_cam_x)
+    sub  a, (hl)
+    ld   e, a
+    inc  hl
+    ld   a, (_cam_x + 1)
+    sbc  a, (hl)
+    ld   d, a
+    ld   hl, #199
+    add  hl, de
+    ld   a, h
+    cp   a, #1
+    jr   c, 2$                  ; < 256
+    jr   nz, 5$
+    ld   a, l
+    cp   a, #0x8f               ; 399 = 0x18f
+    jr   nc, 5$
+2$: ld   a, c                   ; same for y
+    add  a, a
+    ld   e, a
+    ld   d, #0
+    ld   hl, #_ey
+    add  hl, de
+    ld   a, (_cam_y)
+    sub  a, (hl)
+    ld   e, a
+    inc  hl
+    ld   a, (_cam_y + 1)
+    sbc  a, (hl)
+    ld   d, a
+    ld   hl, #199
+    add  hl, de
+    ld   a, h
+    cp   a, #1
+    jr   c, 4$
+    jr   nz, 5$
+    ld   a, l
+    cp   a, #0x8f
+    jr   nc, 5$
+4$: ld   b, #1                  ; contact
+5$: ld   hl, #_ehit
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   a, (hl)
+    or   a, a
+    jr   z, 6$
+    dec  (hl)                   ; stunned while flashing
+    jr   9$
+6$: ld   hl, #_etype            ; follow corridors toward the player
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   a, (hl)
+    ld   e, #6                  ; AI_SPEED
+    cp   a, #1
+    jr   nz, 7$
+    ld   e, #12                 ; bats
+7$: cp   a, #2
+    jr   nz, 8$
+    ld   e, #3                  ; brutes
+8$: ld   a, e
+    ld   (_ai_sp), a
+    push bc
+    ld   a, c
+    call _ai_step
+    pop  bc
+9$: inc  c
+    ld   a, c
+    cp   a, #8                  ; NENEMY
+    jp   c, 1$
+    ld   a, b
+    ret
+    __endasm;
+}
+
+/* Contact damage is applied once after the pass (the old per-enemy loop
+ * could only hurt once a tick too: dmg_cd blocks the rest). */
 static void enemy_tick(void)
 {
-    uint8_t near;
-
     ai_update();
-    for (uint8_t i = 0; i < NENEMY; i++) {
-        if (!ealive[i]) continue;
-        near = 0u;                                 /* |cam - e| < 200 on both axes, before the step */
-        if ((uint16_t)(cam_x - ex[i] + 199u) < 399u)
-            if ((uint16_t)(cam_y - ey[i] + 199u) < 399u) near = 1u;
-        if (ehit[i]) ehit[i]--;                    /* stunned while flashing */
-        else {                                     /* follow corridors toward the player */
-            ai_sp = AI_SPEED;
-            if (etype[i] == 1u) ai_sp = AI_SPEED * 2u;   /* bats */
-            if (etype[i] == 2u) ai_sp = AI_SPEED / 2u;   /* brutes */
-            ai_step(i);
-        }
-        if (near && dmg_cd == 0u) {
-            if (hp) hp--;
-            dmg_cd = 60u;
-            flash_pal = 0x1Bu; flash_n = 6u;          /* hurt: invert */
-            sfx_play(SFX_HURT);
-            if (hp == 0u) game_over();     /* loads the save or floor 1 */
-        }
+    if (enemy_pass() && dmg_cd == 0u) {
+        if (hp) hp--;
+        dmg_cd = 60u;
+        flash_pal = 0x1Bu; flash_n = 6u;          /* hurt: invert */
+        sfx_play(SFX_HURT);
+        if (hp == 0u) game_over();     /* loads the save or floor 1 */
     }
     if (dmg_cd) dmg_cd--;
 }
@@ -494,48 +587,197 @@ static uint8_t draw_item(uint8_t si, uint8_t kind, uint8_t *room)
     return draw_art(si, a, p_x, p_foot, S_PALETTE);
 }
 
+/* project() results per visible object, filled by the scans below. The
+ * asm relies on this layout: k, x, foot, fwd at +0/+9/+18/+27. */
+typedef struct {
+    uint8_t k[9];                        /* enemy index, or item_art kind */
+    uint8_t x[9], foot[9];
+    int16_t fwd[9];
+} vis_t;
+static vis_t ven;                        /* enemies (up to NENEMY) */
+static vis_t vit;                        /* items (up to 8), then stairs */
+
+/* Store the last project() result as entry B (then b++) of the vis_t at
+ * DE, with A as its k byte. Clobbers HL, DE. */
+static void scan_store(void) __naked
+{
+    __asm
+    ld   l, b
+    ld   h, #0
+    add  hl, de                 ; &kind[b]
+    ld   (hl), a
+    ld   de, #9
+    add  hl, de                 ; &x[b]
+    ld   a, (_p_x)
+    ld   (hl), a
+    add  hl, de                 ; &foot[b]
+    ld   a, (_p_foot)
+    ld   (hl), a
+    add  hl, de                 ; &fwd + b (bytes)
+    ld   e, b
+    add  hl, de                 ; &fwd[b] (int16)
+    ld   a, (_p_fwd)
+    ld   (hl+), a
+    ld   a, (_p_fwd + 1)
+    ld   (hl), a
+    inc  b
+    ret
+    __endasm;
+}
+
+/* Visible live enemies into ven; returns how many. Same
+ * project() calls as the old C loop, without SDCC's int16 indexing. */
+static uint8_t scan_enemies(void) __naked
+{
+    __asm
+    ld   bc, #0                 ; b = visible, c = enemy
+1$: ld   hl, #_ealive
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   a, (hl)
+    or   a, a
+    jr   z, 2$
+    push bc
+    ld   a, c
+    add  a, a
+    ld   e, a
+    ld   d, #0
+    ld   hl, #_ey
+    add  hl, de
+    ld   a, (hl+)
+    ld   b, (hl)
+    ld   c, a                   ; bc = ey[i]
+    ld   hl, #_ex
+    add  hl, de
+    ld   a, (hl+)
+    ld   d, (hl)
+    ld   e, a                   ; de = ex[i]
+    call _project
+    pop  bc
+    or   a, a
+    jr   z, 2$
+    ld   de, #_ven
+    ld   a, c
+    call _scan_store
+2$: inc  c
+    ld   a, c
+    cp   a, #8                  ; NENEMY
+    jr   c, 1$
+    ld   a, b
+    ret
+    __endasm;
+}
+
+/* Visible untaken items (cell centres), then the stairs, into vit with
+ * their item_art kind; returns how many. */
+static uint8_t scan_items(void) __naked
+{
+    __asm
+    ld   bc, #0                 ; b = visible, c = item
+1$: ld   a, (_item_n)
+    cp   a, c
+    jr   z, 3$
+    ld   hl, #_item_taken
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   a, (hl)
+    or   a, a
+    jr   nz, 2$
+    push bc
+    ld   hl, #_item_y
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   b, (hl)
+    ld   hl, #_item_x
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   d, (hl)
+    ld   e, #128
+    ld   c, e                   ; (x << 8) + 128, (y << 8) + 128
+    call _project
+    pop  bc
+    or   a, a
+    jr   z, 2$
+    ld   hl, #_item_kind
+    ld   a, l
+    add  a, c
+    ld   l, a
+    adc  a, h
+    sub  a, l
+    ld   h, a
+    ld   a, (hl)
+    ld   de, #_vit
+    call _scan_store
+2$: inc  c
+    jr   1$
+3$: push bc
+    ld   a, (_stairs_x)
+    ld   d, a
+    ld   e, #128
+    ld   a, (_stairs_y)
+    ld   b, a
+    ld   c, e
+    call _project
+    pop  bc
+    or   a, a
+    jr   z, 4$
+    ld   de, #_vit
+    ld   a, #4                  ; IT_STAIRS
+    call _scan_store
+4$: ld   a, b
+    ret
+    __endasm;
+}
+
 /* Billboards for the camera the view was just rendered from: up to 3
  * enemies nearest first, then items and stairs. */
 static void sprite_update(void)
 {
     static const int8_t bob[8] = {0, 1, 2, 1, 0, -1, -2, -1};
-    static uint8_t vi[NENEMY], vx[NENEMY], vfoot[NENEMY];
-    static int16_t vfwd[NENEMY];
-    uint8_t si = GUN_SPRITES, room = SPR_LINE, n = 0u, k, j, best, i, y, pal;   /* 0.. = gun */
+    uint8_t si = GUN_SPRITES, room = SPR_LINE, n, k, j, best, i, y, pal;   /* 0.. = gun */
     const uint8_t *a;
 
-    for (i = 0u; i < NENEMY; i++) {
-        if (!ealive[i]) continue;
-        if (!project(ex[i], ey[i])) continue;
-        vi[n] = i; vx[n] = p_x; vfoot[n] = p_foot; vfwd[n] = p_fwd;
-        n++;
-    }
+    n = scan_enemies();
     for (k = 0u; k < 3u; k++) {
         best = 0xFFu;
         p_fwd = 0x7FFF;                                 /* project() caps fwd at 2560 */
         for (j = 0u; j < n; j++)
-            if (vfwd[j] < p_fwd) { p_fwd = vfwd[j]; best = j; }
+            if (ven.fwd[j] < p_fwd) { p_fwd = ven.fwd[j]; best = j; }
         if (best == 0xFFu) break;
-        vfwd[best] = 0x7FFF;                            /* taken */
-        i = vi[best];
+        ven.fwd[best] = 0x7FFF;                         /* taken */
+        i = ven.k[best];
         a = enemy_art[etype[i]][enemy_tier(p_fwd)];
         if (a[0] > room) continue;
         room -= a[0];
         pal = 0u;
         if (ehit[i]) pal = S_PALETTE;
-        y = vfoot[best];                                /* grunts stand on the floor */
+        y = ven.foot[best];                             /* grunts stand on the floor */
         if (etype[i] == 1u) y = (uint8_t)(BAT_Y + bob[(uint8_t)((vbl_count >> 3) + i) & 7u]);
-        si = draw_art(si, a, vx[best], y, pal);
+        si = draw_art(si, a, ven.x[best], y, pal);
     }
     /* items and stairs stand on the floor; OBP1 so colour 3 shows white */
     item_ahead = 0u;
-    for (i = 0u; i < item_n; i++) {
-        if (item_taken[i]) continue;
-        if (!project((uint16_t)((item_x[i] << 8) + 128u), (uint16_t)((item_y[i] << 8) + 128u))) continue;
-        si = draw_item(si, item_kind[i], &room);
+    n = scan_items();
+    for (j = 0u; j < n; j++) {
+        p_x = vit.x[j]; p_foot = vit.foot[j]; p_fwd = vit.fwd[j];
+        si = draw_item(si, vit.k[j], &room);
     }
-    if (project((uint16_t)((stairs_x << 8) + 128u), (uint16_t)((stairs_y << 8) + 128u)))
-        si = draw_item(si, IT_STAIRS, &room);
     for (i = si; i < spr_used; i++) move_sprite(i, 0u, 0u);   /* the rest are hidden */
     spr_used = si;
 }

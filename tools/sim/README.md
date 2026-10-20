@@ -11,6 +11,7 @@ Each tool builds a scratch copy of a `src/` dir with `bench.inc` (a bench
 | `prof.py SRC [N] [ENTRY]` | exact cycles per label/instruction of an asm routine (SM83 interpreter `sm83.py`); `DEBUG=1 BYLINE=25` for C lines, ENTRY may be a hex address from a `-debug` .noi |
 | `copysim.py SRC [N]` | copy_view cycle by cycle against a PPU model (`ppusim.py`, mode 3 172-289 T): VRAM writes in mode 3, store slack, late halts, lines per copy |
 | `pickup_test.py [DIR]` | builds DIR/src (default: the repo) and plays it in PyBoy: a key is taken, a health item is left at full hearts and taken once hurt |
+| `enemy_ab.py OLD NEW [N]` | enemy_tick() of two src dirs in the SM83 interpreter from the same random enemy states (alive, stun, type, positions near the camera, dmg_cd): compares positions, stuns, hp, flashes, ai_dist |
 
 Baseline for A/B: `mkdir -p tools/sim/base && git archive HEAD src | tar -x -C tools/sim/base`,
 then `$P tools/sim/bench.py tools/sim/base/src tools/sim/base.pkl 400`.
