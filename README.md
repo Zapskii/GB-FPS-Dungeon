@@ -13,7 +13,7 @@ hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **26**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **28**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
@@ -33,7 +33,7 @@ No local GBDK needed: the Makefile runs `/opt/gbdk/bin/lcc` inside the
 | D-pad left/right | turn |
 | B + left/right | strafe |
 | A | shoot (hitscan at screen centre, ~4 shots/s) |
-| Select | automap (pauses; B toggles music, Start saves the run, Select/A closes) |
+| Select | automap (pauses; B toggles music, Start saves to a slot, Select/A closes) |
 
 Items are white and scale with distance (about 4, 8 and 16 px). Walk
 over a key to take it, touch a **D** door (dark grey) with a key to open it,
@@ -50,9 +50,20 @@ floors 3–4 (a hit enemy flashes white and is stunned briefly); at 0 hearts
 the run ends on a GAME OVER screen (floor reached, kills, gold). Clear
 floor 4 to escape: a win screen shows kills, seconds played (map time
 excluded) and gold.
-Start on either screen begins a fresh run; a title screen opens the game.
-With a save on the cart, the title and GAME OVER screens also offer
-**A LOAD SAVE**, which puts you back where you saved.
+Start on either screen begins a fresh run. The title screen runs the
+raycaster in attract mode: the camera walks a floor-1 maze on its own
+(right-hand wall follower, `att_step()`) behind the title text. Each new
+floor opens with a ~1.5 s glide into the spawn point while FLOOR n shows
+(a walk away from the spawn, recorded into `ai_dist` and played back
+reversed, so play starts exactly at the spawn); loading a save turns once
+on the spot instead. Enemies, pickups and the clock wait during the intro;
+`make PROFILE=1` skips it.
+There are 3 save slots. Start on the map opens a slot picker ("SLOT 2
+FLOOR 3" / "SLOT 3 EMPTY"): left/right choose, Start or A saves, B
+cancels. With any slot used, the title and GAME OVER screens offer
+**A LOAD SAVE**: the same picker over the used slots, and A or Start
+puts you back where you saved. The picker starts on the slot last
+loaded or saved.
 HUD row 1, right: frames per second (views flipped per 60 VBlanks,
 counted and written by the VBL ISR every second).
 
@@ -177,7 +188,8 @@ the save instead).
 ### Saves
 
 The cart is MBC1+RAM+BATTERY with one 8 KB SRAM bank (`-Wm-yt0x03
--Wm-ya1` in the Makefile). One slot at 0xA000: the magic `DGN1`, then
+-Wm-ya1` in the Makefile). Three slots, `SLOT_SIZE` (0xA00) apart from
+0xA000. Each: the magic `DGN2`, the floor (shown by the picker), then
 the variables listed in `save_vars[]` in order (camera, hp/keys/floor/
 kills/gold/secs, enemies, items, stairs, `imap` with opened doors,
 `seen`), about 2.2 KB. A save clears the magic first and writes it

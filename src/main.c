@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     26u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     28u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -105,6 +105,11 @@ static uint8_t hud_last_floor = 0xFFu;
 #define T_R 239u
 static volatile uint8_t banner_t;       /* frames left; 0 = off */
 static uint8_t banner_on;               /* banner tiles are in the BG map */
+
+/* Intro run by the main loop after a floor or save loads (see intro()). */
+#define INTRO_GLIDE 1u                  /* new floor: auto-walk down the corridor */
+#define INTRO_SPIN  2u                  /* loaded save: one turn on the spot */
+static uint8_t intro_req;
 
 /* ---- enemies ---- */
 #define NENEMY 8u
@@ -164,6 +169,7 @@ static void load_level(uint8_t n)
     level_no = n;
     floor_no = (uint8_t)(n + 1u);
     banner_t = BANNER_T;
+    intro_req = INTRO_GLIDE;
     keys = 0u;
     item_n = 0u;
     for (i = 0u; i < 1024u; i++) {
@@ -751,11 +757,15 @@ static void banner(uint8_t y, const char *t)
     set_bkg_tiles(0u, y, 20u, 1u, row);
 }
 
-/* ---- save: battery SRAM (MBC1+RAM+BATTERY, Makefile), one slot at 0xA000.
- * Magic first, then every variable below in order. Change the list or any
- * size -> bump the magic, so old saves read as empty. ---- */
-#define SRAM ((uint8_t *)0xA000u)
-static const uint8_t save_magic[4] = {'D', 'G', 'N', '1'};
+/* ---- save: battery SRAM (MBC1+RAM+BATTERY, Makefile), 3 slots of
+ * SLOT_SIZE from 0xA000. Each: magic, the floor (for the slot picker),
+ * then every variable below in order. Change the list or any size -> bump
+ * the magic, so old saves read as empty. ---- */
+#define SRAM      ((uint8_t *)0xA000u)
+#define NSLOTS    3u
+#define SLOT_SIZE 0x0A00u                /* > 5 + sum of save_vars (~2.2 KB) */
+#define SLOT_HDR  5u                     /* magic + floor */
+static const uint8_t save_magic[4] = {'D', 'G', 'N', '2'};
 static const struct { void *p; uint16_t n; } save_vars[] = {
     {&cam_x, 2u}, {&cam_y, 2u}, {&cam_a, 1u},
     {&hp, 1u}, {&keys, 1u}, {&level_no, 1u}, {&kills, 1u}, {&gold, 1u}, {&secs, 2u},
@@ -766,44 +776,124 @@ static const struct { void *p; uint16_t n; } save_vars[] = {
     {&stairs_x, 1u}, {&stairs_y, 1u},
     {imap, sizeof imap}, {seen, sizeof seen},
 };
+static uint8_t cur_slot;                 /* last loaded/saved: the picker starts here */
 
-static uint8_t save_ok(void)
+/* Floor saved in slot s (1..4), 0 = empty. */
+static uint8_t slot_floor(uint8_t s)
 {
-    uint8_t r;
+    uint8_t *b = SRAM + s * SLOT_SIZE, f = 0u;
 
     ENABLE_RAM;
-    r = (uint8_t)(memcmp(SRAM, save_magic, 4u) == 0);
+    if (memcmp(b, save_magic, 4u) == 0) f = b[4];
     DISABLE_RAM;
-    return r;
+    return f;
 }
 
-/* store 1: game -> SRAM, 0: SRAM -> game. Magic is cleared before a store
- * and written last, so a power cut mid-save leaves no slot, not a bad one. */
-static void save_copy(uint8_t store)
+static uint8_t save_ok(void)             /* any slot used */
 {
-    uint8_t *s = SRAM + 4u, i;
+    uint8_t s;
+
+    for (s = 0u; s < NSLOTS; s++) if (slot_floor(s)) return 1u;
+    return 0u;
+}
+
+/* store 1: game -> slot, 0: slot -> game. Magic is cleared before a store
+ * and written last, so a power cut mid-save leaves an empty slot, not a bad one. */
+static void save_copy(uint8_t slot, uint8_t store)
+{
+    uint8_t *b = SRAM + slot * SLOT_SIZE, *s = b + SLOT_HDR, i;
 
     ENABLE_RAM;
-    if (store) SRAM[0] = 0u;
+    if (store) b[0] = 0u;
     for (i = 0u; i < sizeof save_vars / sizeof save_vars[0]; i++) {
         if (store) memcpy(s, save_vars[i].p, save_vars[i].n);
         else       memcpy(save_vars[i].p, s, save_vars[i].n);
         s += save_vars[i].n;
     }
-    if (store) memcpy(SRAM, save_magic, 4u);
+    if (store) {
+        b[4] = floor_no;
+        memcpy(b, save_magic, 4u);
+    }
     DISABLE_RAM;
 }
 
-static void save_game(void) { save_copy(1u); }
+static void save_game(void) { save_copy(cur_slot, 1u); }
 
 static void load_game(void)
 {
-    save_copy(0u);
+    save_copy(cur_slot, 0u);
     floor_no = (uint8_t)(level_no + 1u);
     for (uint8_t i = 0u; i < NENEMY; i++) ehit[i] = 0u;
     seen_at = 0xFFFFu;
     ai_reset();
     banner_t = BANNER_T;
+    intro_req = INTRO_SPIN;
+}
+
+static void label_num(char *buf, const char *label, uint16_t v);
+
+/* Slot picker on BG row y ("SLOT 2 FLOOR 3" / "SLOT 3 EMPTY"), "PICK SLOT"
+ * on row y-1. Left/right cycle, A/Start pick, B cancels. used_only skips
+ * empty slots (loading; at least one must be used). Returns the slot or
+ * 0xFF. The caller redraws both rows. */
+static uint8_t pick_slot(uint8_t y, uint8_t used_only)
+{
+    char t[16];
+    uint8_t s = cur_slot, k, f, i;
+
+    banner((uint8_t)(y - 1u), "PICK SLOT");
+    for (;;) {
+        while (used_only && !slot_floor(s)) s = (uint8_t)((s + 1u) % NSLOTS);
+        f = slot_floor(s);
+        label_num(t, "SLOT", (uint8_t)(s + 1u));
+        for (i = 0u; t[i]; i++) ;
+        if (f) label_num(t + i, " FLOOR", f);
+        else   strcpy(t + i, " EMPTY");
+        banner(y, t);
+        while (joypad()) wait_vbl_done();
+        while (!(k = (uint8_t)(joypad() & (J_LEFT | J_RIGHT | J_A | J_START | J_B)))) wait_vbl_done();
+        if (k & J_B) s = 0xFFu;
+        if (k & (J_B | J_A | J_START)) break;
+        do {
+            s = (uint8_t)((s + ((k & J_RIGHT) ? 1u : NSLOTS - 1u)) % NSLOTS);
+        } while (used_only && !slot_floor(s));
+    }
+    while (joypad()) wait_vbl_done();
+    return s;
+}
+
+static void show_view(void);
+static void att_step(void);
+static uint8_t ticks(void);
+
+/* Wait for Start, or A (can_load) and a slot pick on BG row `row` ("PRESS
+ * START" / "A LOAD SAVE" sit on row-1 / row and come back on a cancel).
+ * anim: the title walker keeps running meanwhile. Returns non-zero when a
+ * slot was picked (cur_slot). */
+static uint8_t start_or_load(uint8_t can_load, uint8_t row, uint8_t anim)
+{
+    uint8_t k = can_load ? (J_START | J_A) : J_START, pad, s, n;
+
+    while (joypad() & k) wait_vbl_done();
+    for (;;) {
+        while (!((pad = joypad()) & k)) {
+            if (anim) {
+                for (n = ticks(); n; n--) att_step();
+                show_view();
+                flip_req = 1u;
+                images++;
+            } else {
+                wait_vbl_done();
+            }
+        }
+        if (!(pad & J_A)) break;
+        s = pick_slot(row, 1u);
+        if (s != 0xFFu) { cur_slot = s; break; }
+        banner((uint8_t)(row - 1u), "PRESS START");
+        banner(row, "A LOAD SAVE");
+    }
+    while (joypad() & k) wait_vbl_done();
+    return (uint8_t)(pad & J_A);
 }
 
 /* Paused overhead map until Select (or A/Start) is pressed again; B toggles music. */
@@ -828,17 +918,25 @@ static void show_map(void)
     while (flip_req) ;
 
     set_bkg_data(FONT_BASE, FONT_N, font_tiles);   /* over sprite tiles: all hidden but the arrow */
-    banner(13u, "PRESS B");
     banner(15u, "START SAVE");
 
     while (joypad() & J_SELECT) wait_vbl_done();
     for (;;) {                           /* B toggles music, Start saves, Select/A close */
+        banner(13u, "PRESS B");          /* also after the slot picker's hint */
         banner(14u, (NR51_REG & 0x02u) ? "MUSIC ON" : "MUSIC OFF");
         while (!(joypad() & (J_SELECT | J_START | J_A | J_B))) wait_vbl_done();
         si = joypad();
         if (si & J_START) {
-            save_game();
-            banner(15u, "SAVED");
+            si = pick_slot(15u, 0u);
+            if (si != 0xFFu) {
+                char t[10];
+                cur_slot = si;
+                save_game();
+                label_num(t, "SAVED", (uint8_t)(si + 1u));
+                banner(15u, t);
+            } else {
+                banner(15u, "START SAVE");
+            }
         } else if (si & J_B) {
             NR51_REG ^= 0x66u;           /* ch2 + ch3 (music.h) off both sides */
         } else break;
@@ -863,12 +961,12 @@ static void label_num(char *buf, const char *label, uint16_t v)
 }
 
 /* Full-screen text (4 lines + PRESS START) until Start is pressed, then
- * the normal frame and sprite tiles come back. can_load: A also closes it
- * ("A LOAD SAVE"); returns non-zero if A was the key. */
+ * the normal frame and sprite tiles come back. can_load: A picks a save
+ * slot ("A LOAD SAVE"); returns non-zero if one was picked (cur_slot). */
 static uint8_t text_screen(const char *l1, const char *l2, const char *l3, const char *l4,
                            uint8_t can_load)
 {
-    uint8_t i, k = can_load ? (J_START | J_A) : J_START, pad;
+    uint8_t i;
 
     for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
     gun_shown = 0xFFu;
@@ -885,15 +983,13 @@ static uint8_t text_screen(const char *l1, const char *l2, const char *l3, const
     if (can_load) banner(15u, "A LOAD SAVE");
     DISPLAY_ON;
 
-    while (joypad() & k) wait_vbl_done();
-    while (!((pad = joypad()) & k)) wait_vbl_done();
-    while (joypad() & k) wait_vbl_done();
+    i = start_or_load(can_load, 15u, 0u);
 
     DISPLAY_OFF;
     draw_frame();
     sprites_init();                      /* the font overwrote some */
     DISPLAY_ON;
-    return (uint8_t)(pad & J_A);
+    return i;
 }
 
 static void new_run(void)
@@ -978,6 +1074,149 @@ static void render_view(void)
     PROF(2);
 }
 
+/* Camera walker for the title and the floor intro: turn to att_d * 64 in
+ * steps of 4, then glide ATT_STEP along it; at each cell centre take the
+ * first open way of right, ahead, left, back (right-hand wall follower).
+ * Expects the camera on a cell centre facing a multiple of 64 at start. */
+#define ATT_STEP 8                      /* px per tick (player walks ~16) */
+static const int8_t att_off[4] = {1, 32, -1, -32};    /* E S W N in imap */
+static uint8_t att_d, att_pick;
+
+static void att_start(void)
+{
+    att_d = (uint8_t)(cam_a >> 6);
+    att_pick = 0u;
+}
+
+static void att_step(void)
+{
+    uint8_t want = (uint8_t)(att_d << 6);
+    uint16_t i;
+
+    if (cam_a != want) {
+        if ((int8_t)(want - cam_a) > 0) cam_a += 4u;
+        else                            cam_a -= 4u;
+        return;
+    }
+    if ((uint8_t)cam_x == 128u && (uint8_t)cam_y == 128u && !att_pick) {
+        i = (uint16_t)(((cam_y >> 8) << 5) + (cam_x >> 8));
+        att_d = (uint8_t)((att_d + 1u) & 3u);                 /* right first */
+        while (imap[i + att_off[att_d]]) att_d = (uint8_t)((att_d + 3u) & 3u);
+        att_pick = 1u;
+        return;
+    }
+    att_pick = 0u;
+    if (att_d == 0u)      cam_x += ATT_STEP;
+    else if (att_d == 1u) cam_y += ATT_STEP;
+    else if (att_d == 2u) cam_x -= ATT_STEP;
+    else                  cam_y -= ATT_STEP;
+}
+
+/* Logic ticks (60 Hz) since the last call, at most 4 per image. */
+static uint8_t att_last;
+static uint8_t ticks(void)
+{
+    uint8_t n = (uint8_t)(vbl_count - att_last);
+
+    att_last = (uint8_t)(att_last + n);
+    return (n > 4u) ? 4u : n;
+}
+
+/* Render the view into the hidden bank; the caller sets sprites and flip_req. */
+static void show_view(void)
+{
+    render_view();
+    while (flip_req) ;                   /* last image shown: banks settled */
+    PROF(3);
+    r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;   /* hidden bank */
+    copy_view();                         /* only rows that can differ */
+#ifdef CHECK
+    {
+        uint8_t e = check_view();
+        if (e > chk_err) chk_err = e;   /* worst image so far, shown by the VBL ISR */
+    }
+#endif
+    PROF(4);
+}
+
+/* Title over a live view: the camera walks a floor-1 maze until Start or
+ * (with a save) A and a slot. Sprites stay hidden: the font sits on their
+ * tiles. Returns non-zero for a load (cur_slot). The caller seeds and
+ * loads the real floor. */
+static uint8_t title_screen(void)
+{
+    uint8_t i, can_load = save_ok();
+    for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
+    gun_shown = 0xFFu;
+    load_level(0u);
+    banner_t = 0u;
+    DISPLAY_OFF;
+    set_bkg_data(FONT_BASE, FONT_N, font_tiles);
+    draw_frame();
+    banner(1u, "DUNGEON");
+    banner(2u, "ESCAPE 4 FLOORS");
+    banner(13u, "PRESS START");
+    banner(14u, can_load ? "A LOAD SAVE" : "");
+    banner(15u, "BY ZAPSKI");
+    view_reset();
+    DISPLAY_ON;
+
+    att_start();
+    ticks();
+    i = start_or_load(can_load, 14u, 1u);
+
+    while (flip_req) ;
+    DISPLAY_OFF;
+    draw_frame();
+    sprites_init();                      /* the font overwrote some */
+    DISPLAY_ON;
+    return i;
+}
+
+/* After a load, with the game paused, while the FLOOR banner shows. New
+ * floor: the walker walks away from the spawn facing backwards and the
+ * walk is played back reversed, so the camera glides in and stops on the
+ * spawn pose. Save: one turn on the spot. Either way the player starts
+ * exactly where load_level/load_game put them. Enemies, pickups and the
+ * clock wait. The recording borrows ai_dist (ai_reset after). */
+#define INTRO_T 90u                      /* ticks, = BANNER_T */
+static void intro(void)
+{
+    uint16_t *rx = (uint16_t *)ai_dist, *ry = rx + INTRO_T;
+    uint8_t *ra = (uint8_t *)(ry + INTRO_T);
+    uint16_t x0 = cam_x, y0 = cam_y;
+    uint8_t a0 = cam_a, t, n;
+
+    if (intro_req == INTRO_GLIDE) {
+        cam_a += 128u;
+        att_start();
+        for (t = 0u; t < INTRO_T; t++) {
+            att_step();
+            rx[t] = cam_x; ry[t] = cam_y; ra[t] = (uint8_t)(cam_a + 128u);
+        }
+    }
+    t = INTRO_T;
+    ticks();
+    while (t) {
+        for (n = ticks(); n && t; n--) {
+            t--;
+            if (intro_req == INTRO_GLIDE) {
+                cam_x = rx[t]; cam_y = ry[t]; cam_a = ra[t];
+            } else if (t >= INTRO_T - 64u) {
+                cam_a += 4u;                          /* 64 x 4 = 256: a full turn */
+            }
+        }
+        if (!t) { cam_x = x0; cam_y = y0; cam_a = a0; }
+        show_view();
+        sprite_update();
+        gun_draw(0u, 0u, 0u);
+        flip_req = 1u;
+        images++;
+    }
+    ai_reset();
+    intro_req = 0u;
+}
+
 void main(void)
 {
     uint8_t last_vbl, tick = 0u, pad_prev = 0u, fire_cd = 0u, i;
@@ -989,7 +1228,7 @@ void main(void)
     add_VBL(vbl_handler);
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
-    i = text_screen("DUNGEON", "ESCAPE 4 FLOORS", "", "BY ZAPSKI", save_ok());
+    i = title_screen();
 #ifdef PROFILE
     initrand(0x1234u);
 #else
@@ -997,15 +1236,22 @@ void main(void)
 #endif
     if (i) load_game();
     else   load_level(0u);
+#ifdef PROFILE
+    intro_req = 0u;                      /* profile the start view itself */
+#endif
     view_reset();
     last_vbl = vbl_count;
 
     while (1) {
+        if (intro_req) {
+            intro();
+            last_vbl = vbl_count;        /* no catch-up for the intro */
+        }
         /* game logic at 60 Hz regardless of the render rate */
         uint8_t n = (uint8_t)(vbl_count - last_vbl);
         last_vbl = (uint8_t)(last_vbl + n);
         if (n > 4u) n = 4u;
-        while (n) {
+        while (n && !intro_req) {       /* a new floor stops input: the intro needs the spawn pose */
             handle_input();
             post_move();
             {
@@ -1038,18 +1284,7 @@ void main(void)
         }
         PROF(0);
 
-        render_view();
-        while (flip_req) ;               /* last image shown: banks settled */
-        PROF(3);
-        r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;   /* hidden bank */
-        copy_view();                     /* only rows that can differ */
-#ifdef CHECK
-        {
-            uint8_t e = check_view();
-            if (e > chk_err) chk_err = e;   /* worst image so far, shown by the VBL ISR */
-        }
-#endif
-        PROF(4);
+        show_view();
         sprite_update();                 /* shadow OAM; pushed by the next VBL */
         PROF(5);
         if (gun_low != gun_low_shown) {
