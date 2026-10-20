@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     25u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     26u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -687,7 +687,8 @@ void hud_update(void)                    /* called from the VBL ISR */
  * O reuses digit 0; E S N W K F come from the HUD set. Loaded only while a
  * text screen or the map is up: in play these tiles hold sprites (sprites.h). */
 #define FONT_BASE 184u
-const uint8_t font_tiles[14 * 16] = {
+#define FONT_N    15u
+const uint8_t font_tiles[FONT_N * 16] = {
     0,0, 0,0, 40,40, 40,40, 16,16, 16,16, 16,16, 0,0,   /* Y */
     0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 56,56, 0,0,   /* U */
     0,0, 0,0, 56,56, 32,32, 32,32, 32,32, 56,56, 0,0,   /* C */
@@ -702,6 +703,7 @@ const uint8_t font_tiles[14 * 16] = {
     0,0, 0,0, 68,68, 108,108, 84,84, 68,68, 68,68, 0,0, /* M (5 wide, else it reads as N) */
     0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 16,16, 0,0,   /* V */
     0,0, 0,0, 48,48, 40,40, 48,48, 40,40, 48,48, 0,0,   /* B */
+    0,0, 0,0, 56,56, 8,8, 16,16, 32,32, 56,56, 0,0,     /* Z */
 };
 
 /* HUD gem for the gold count (BG tile 183) */
@@ -711,13 +713,13 @@ const uint8_t gold_tile[16] = {
 
 static uint8_t glyph(char ch)
 {
-    static const char extra[] = "YUCAPDTILRGMVB";
+    static const char extra[] = "YUCAPDTILRGMVBZ";
     static const char hud[] = "NESWKF";
     uint8_t i;
 
     if (ch >= '0' && ch <= '9') return HUD_DIGIT(ch - '0');
     if (ch == 'O') return HUD_DIGIT(0);
-    for (i = 0u; i < 14u; i++) if (extra[i] == ch) return (uint8_t)(FONT_BASE + i);
+    for (i = 0u; i < FONT_N; i++) if (extra[i] == ch) return (uint8_t)(FONT_BASE + i);
     for (i = 0u; i < 6u; i++) if (hud[i] == ch) return (uint8_t)(HUD_N + i);
     return T_WHITE;
 }
@@ -825,7 +827,7 @@ static void show_map(void)
     flip_req = 1u;
     while (flip_req) ;
 
-    set_bkg_data(FONT_BASE, 14u, font_tiles);   /* over sprite tiles: all hidden but the arrow */
+    set_bkg_data(FONT_BASE, FONT_N, font_tiles);   /* over sprite tiles: all hidden but the arrow */
     banner(13u, "PRESS B");
     banner(15u, "START SAVE");
 
@@ -844,7 +846,7 @@ static void show_map(void)
     }
     while (joypad() & (J_SELECT | J_A)) wait_vbl_done();
     frame_draw();                        /* bricks back over the text rows */
-    set_sprite_data(FONT_BASE, 14u, spr_tiles + 64u);   /* sprites_init's 184.. block */
+    set_sprite_data(FONT_BASE, FONT_N, spr_tiles + 64u);   /* sprites_init's 184.. block */
 }
 
 /* Writes v right after a label into buf: "KILLS 12". */
@@ -873,7 +875,7 @@ static uint8_t text_screen(const char *l1, const char *l2, const char *l3, const
     banner_t = 0u;                       /* the ISR must not touch the text */
     banner_on = 0u;
     DISPLAY_OFF;
-    set_bkg_data(FONT_BASE, 14u, font_tiles);
+    set_bkg_data(FONT_BASE, FONT_N, font_tiles);
     for (i = 0u; i < 18u; i++) banner(i, "");
     banner(4u, l1);
     banner(7u, l2);
@@ -987,7 +989,7 @@ void main(void)
     add_VBL(vbl_handler);
     set_interrupts(VBL_IFLAG);
     DISPLAY_ON;
-    i = text_screen("DUNGEON", "ESCAPE 4 FLOORS", "", "", save_ok());
+    i = text_screen("DUNGEON", "ESCAPE 4 FLOORS", "", "BY ZAPSKI", save_ok());
 #ifdef PROFILE
     initrand(0x1234u);
 #else

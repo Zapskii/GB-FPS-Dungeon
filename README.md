@@ -13,7 +13,7 @@ hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **25**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **26**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
