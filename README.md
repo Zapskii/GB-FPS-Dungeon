@@ -284,7 +284,7 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
 - Build L (enemy types, items, item size tiers) tested OK in mGBA and on
   a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
   gun drop confirmed by the user. Build P (gun slides instead of jumping):
-  checked in gearboy.
+  confirmed working by the user (2026-10-20).
 - Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
 - Ideas not done: a third enemy type (needs ~12 tiles with mirrored art,
   or reuse grunt art one tier larger as a "brute"), full wall textures.
