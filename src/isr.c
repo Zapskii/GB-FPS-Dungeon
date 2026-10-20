@@ -1,4 +1,4 @@
-/* VBlank handler: frame counter, bank flip, OAM push, flashes, HUD.
+/* VBlank handler: frame counter, bank flip, OAM push, flashes, HUD, music.
  *
  * The 3D view is no longer streamed from here: the main loop renders a
  * bitmap into WRAM, copy_vbuf() (render.s) moves it into the hidden VRAM
@@ -10,6 +10,7 @@
 #include <gbdk/platform.h>
 #include <gb/gb.h>
 #include <stdint.h>
+#include "music.h"
 
 volatile uint8_t vbl_count = 0u;
 volatile uint8_t flash_n = 0u, flash_pal = 0xE4u;   /* BGP override frames */
@@ -32,6 +33,7 @@ void vbl_handler(void)
     if (flash_n) { BGP_REG = flash_pal; flash_n--; }
     else         BGP_REG = 0xE4u;
     hud_update();
+    music_tick();
     if (++fps_t == 60u) {                /* once a second: views shown, HUD row 1 right */
         uint8_t n = images;
         images = 0u;

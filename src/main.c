@@ -668,31 +668,6 @@ static void view_reset(void)
     for (i = 0u; i < 32u; i++) { r_vh[i] = 0u; r_vh[i + 32u] = 64u; }
 }
 
-/* Paused overhead map until Select (or A/B/Start) is pressed again. */
-static void show_map(void)
-{
-    uint8_t si;
-
-    draw_map();
-    while (flip_req) ;                   /* hidden bank settled */
-    r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;
-    copy_vbuf();
-    view_reset();                        /* the map replaced that bank's view */
-    /* arrow centre is pixel (3,3) of its tile; OAM = screen + (8, 16) */
-    set_sprite_data(SPR_ARROW, 2u, &arrow_tiles[(uint16_t)(((uint8_t)(cam_a + 16u)) >> 5) << 5]);   /* STAT-safe */
-    set_sprite_tile(0u, SPR_ARROW);
-    set_sprite_prop(0u, S_PALETTE);      /* white */
-    move_sprite(0u, (uint8_t)(VIEW_X0 + MAP_X0 + (cam_x >> 7) - 3u + 8u),
-                    (uint8_t)(VIEW_Y0 + (cam_y >> 7) - 3u + 16u));
-    for (si = 1u; si < MAX_SPR; si++) move_sprite(si, 0u, 0u);
-    flip_req = 1u;
-    while (flip_req) ;
-
-    while (joypad() & J_SELECT) wait_vbl_done();
-    while (!(joypad() & (J_SELECT | J_START | J_A | J_B))) wait_vbl_done();
-    while (joypad() & (J_SELECT | J_START | J_A | J_B)) wait_vbl_done();
-}
-
 static uint8_t hud_dir = 0xFFu;
 
 static void init_hud(void)
@@ -770,9 +745,9 @@ void hud_update(void)                    /* called from the VBL ISR */
 
 /* Extra letters for the title/end screens, HUD style (3x5, black on white).
  * O reuses digit 0; E S N W K F come from the HUD set. Loaded only while a
- * text screen is up: in play these tiles hold sprites (sprites.h). */
+ * text screen or the map is up: in play these tiles hold sprites (sprites.h). */
 #define FONT_BASE 184u
-const uint8_t font_tiles[13 * 16] = {
+const uint8_t font_tiles[14 * 16] = {
     0,0, 0,0, 40,40, 40,40, 16,16, 16,16, 16,16, 0,0,   /* Y */
     0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 56,56, 0,0,   /* U */
     0,0, 0,0, 56,56, 32,32, 32,32, 32,32, 56,56, 0,0,   /* C */
@@ -786,6 +761,7 @@ const uint8_t font_tiles[13 * 16] = {
     0,0, 0,0, 56,56, 32,32, 40,40, 40,40, 56,56, 0,0,   /* G */
     0,0, 0,0, 68,68, 108,108, 84,84, 68,68, 68,68, 0,0, /* M (5 wide, else it reads as N) */
     0,0, 0,0, 40,40, 40,40, 40,40, 40,40, 16,16, 0,0,   /* V */
+    0,0, 0,0, 48,48, 40,40, 48,48, 40,40, 48,48, 0,0,   /* B */
 };
 
 /* HUD gem for the gold count (BG tile 183) */
@@ -795,13 +771,13 @@ const uint8_t gold_tile[16] = {
 
 static uint8_t glyph(char ch)
 {
-    static const char extra[] = "YUCAPDTILRGMV";
+    static const char extra[] = "YUCAPDTILRGMVB";
     static const char hud[] = "NESWKF";
     uint8_t i;
 
     if (ch >= '0' && ch <= '9') return HUD_DIGIT(ch - '0');
     if (ch == 'O') return HUD_DIGIT(0);
-    for (i = 0u; i < 13u; i++) if (extra[i] == ch) return (uint8_t)(FONT_BASE + i);
+    for (i = 0u; i < 14u; i++) if (extra[i] == ch) return (uint8_t)(FONT_BASE + i);
     for (i = 0u; i < 6u; i++) if (hud[i] == ch) return (uint8_t)(HUD_N + i);
     return T_WHITE;
 }
@@ -833,6 +809,42 @@ static void banner(uint8_t y, const char *t)
     set_bkg_tiles(0u, y, 20u, 1u, row);
 }
 
+/* Paused overhead map until Select (or A/Start) is pressed again; B toggles music. */
+static void show_map(void)
+{
+    uint8_t si;
+
+    draw_map();
+    while (flip_req) ;                   /* hidden bank settled */
+    r_dst = (LCDC_REG & LCDCF_BG8000) ? 0x9000u : 0x8000u;
+    copy_vbuf();
+    view_reset();                        /* the map replaced that bank's view */
+    /* arrow centre is pixel (3,3) of its tile; OAM = screen + (8, 16) */
+    set_sprite_data(SPR_ARROW, 2u, &arrow_tiles[(uint16_t)(((uint8_t)(cam_a + 16u)) >> 5) << 5]);   /* STAT-safe */
+    set_sprite_tile(0u, SPR_ARROW);
+    set_sprite_prop(0u, S_PALETTE);      /* white */
+    move_sprite(0u, (uint8_t)(VIEW_X0 + MAP_X0 + (cam_x >> 7) - 3u + 8u),
+                    (uint8_t)(VIEW_Y0 + (cam_y >> 7) - 3u + 16u));
+    for (si = 1u; si < MAX_SPR; si++) move_sprite(si, 0u, 0u);
+    flip_req = 1u;
+    while (flip_req) ;
+
+    set_bkg_data(FONT_BASE, 14u, font_tiles);   /* over sprite tiles: all hidden but the arrow */
+    banner(13u, "PRESS B");
+
+    while (joypad() & J_SELECT) wait_vbl_done();
+    for (;;) {                           /* B toggles music, the rest close */
+        banner(14u, (NR51_REG & 0x02u) ? "MUSIC ON" : "MUSIC OFF");
+        while (!(joypad() & (J_SELECT | J_START | J_A | J_B))) wait_vbl_done();
+        if (!(joypad() & J_B)) break;
+        NR51_REG ^= 0x66u;               /* ch2 + ch3 (music.h) off both sides */
+        while (joypad() & J_B) wait_vbl_done();
+    }
+    while (joypad() & (J_SELECT | J_START | J_A | J_B)) wait_vbl_done();
+    frame_draw();                        /* bricks back over the text rows */
+    set_sprite_data(FONT_BASE, 14u, spr_tiles + 64u);   /* sprites_init's 184.. block */
+}
+
 /* Writes v right after a label into buf: "KILLS 12". */
 static void label_num(char *buf, const char *label, uint16_t v)
 {
@@ -856,7 +868,7 @@ static void text_screen(const char *l1, const char *l2, const char *l3, const ch
     banner_t = 0u;                       /* the ISR must not touch the text */
     banner_on = 0u;
     DISPLAY_OFF;
-    set_bkg_data(FONT_BASE, 13u, font_tiles);
+    set_bkg_data(FONT_BASE, 14u, font_tiles);
     for (i = 0u; i < 18u; i++) banner(i, "");
     banner(4u, l1);
     banner(7u, l2);
@@ -919,7 +931,7 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('T') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('U') - FONT_BASE) << 4]);
     set_bkg_data(T_L, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
     set_bkg_data(T_R, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
     frame_init();

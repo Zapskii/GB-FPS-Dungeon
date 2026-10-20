@@ -2,7 +2,7 @@
  *
  * Each effect is one row of register values: ch1 (square + sweep) and/or
  * ch4 (noise). Hardware length/envelope/sweep end the sound by itself, so
- * there is no per-frame update. A row with NRx4 == 0 skips that channel.
+ * there is no per-frame update. ch2/ch3 belong to the music (music.h). A row with NRx4 == 0 skips that channel.
  * A new effect on a busy channel simply cuts the old one off.
  */
 #ifndef SFX_H
@@ -42,6 +42,16 @@ static void sfx_init(void)
     NR52_REG = 0x80u;   /* APU on (must be first) */
     NR50_REG = 0x77u;   /* max master volume */
     NR51_REG = 0xFFu;   /* all channels to both sides */
+    {                   /* triangle wave for the music bass (music.h) */
+        static const uint8_t tri[16] = {
+            0x01u, 0x23u, 0x45u, 0x67u, 0x89u, 0xABu, 0xCDu, 0xEFu,
+            0xFEu, 0xDCu, 0xBAu, 0x98u, 0x76u, 0x54u, 0x32u, 0x10u
+        };
+        uint8_t i;
+        NR30_REG = 0x00u;                      /* DAC off to write wave RAM */
+        for (i = 0u; i < 16u; i++) ((volatile uint8_t *)0xFF30u)[i] = tri[i];
+        NR30_REG = 0x80u;
+    }
 }
 
 static void sfx_play(uint8_t id)

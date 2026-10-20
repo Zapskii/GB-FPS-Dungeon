@@ -31,7 +31,7 @@ No local GBDK needed: the Makefile runs `/opt/gbdk/bin/lcc` inside the
 | D-pad left/right | turn |
 | B + left/right | strafe |
 | A | shoot (hitscan at screen centre, ~4 shots/s) |
-| Select | automap (pauses; Select/A/B/Start closes) |
+| Select | automap (pauses; B toggles music, shown under the map; Select/A/Start closes) |
 
 Items are white and scale with distance (about 4, 8 and 16 px). Walk
 over a key to take it, touch a **D** door (dark grey) with a key to open it,
