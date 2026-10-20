@@ -14,7 +14,7 @@ def build(src, extra=()):
     if '_cw_seg::' in open(os.path.join(w, 'src', 'render.s')).read(): extra = tuple(extra) + ('-DHAVE_SEG',)
     cmd = ['docker', 'run', '--rm', '-u', '%d:%d' % (os.getuid(), os.getgid()), '-v', HERE + ':/s', '-w', '/s/bw',
            'gbdk-dev', '/opt/gbdk/bin/lcc', '-Wl-m', '-Wl-j', *extra, '-o', 'b.gb',
-           'src/main.c', 'src/isr.c', 'src/render.s', 'src/math.s'] + (['src/rtabs.s'] if os.path.exists(os.path.join(w, 'src', 'rtabs.s')) else [])
+           'src/main.c', 'src/isr.c', 'src/render.s', 'src/math.s', 'src/billboard.s'] + (['src/rtabs.s'] if os.path.exists(os.path.join(w, 'src', 'rtabs.s')) else [])
     for _ in range(4):
         __import__('time').sleep(0.5)
         r = subprocess.run(cmd, capture_output=True, text=True)
@@ -83,10 +83,10 @@ if __name__ == '__main__':
         names = 'vbuf top bot zb hits seen oam'.split()
         bad = 0
         for i, (x, y) in enumerate(zip(a, b)):
-            # vbuf core rows may be left to copy_view now: the copied bank
-            # must match the reference's vbuf instead (after both banks filled)
+            # vbuf core rows may be left to copy_view now: compare the two
+            # copied banks against each other, not against vbuf
             d = [names[k] for k in range(1, 7) if x[k] != y[k]]
-            if i >= 3 and y[7] and y[7] != x[0]: d.append('vram != ref vbuf')
+            if i >= 3 and y[7] and y[7] != x[7]: d.append('vram != ref vram')
             if d:
                 bad += 1
                 if bad <= 10: print('view', i, 'differs:', d)

@@ -340,10 +340,46 @@ tiles).
   - C: project() in asm (math.s, identical on 20,000 random points),
     gun_draw only when the sprite changes, sprite_update hides only the
     slots it used, cheaper enemy contact test.
-  - Floor 1 played on a physical DMG: works well (2026-10-20).
-  - Still to run on hardware: `make clean && make CHECK=1` re-reads the
-    copied bank after every image and shows the worst mismatch count at
-    HUD row 1 left (must stay 00; that build runs at ~5 fps).
+  - Floors 1-4 played on a physical DMG (2026-10-20): clean, and the
+    `make CHECK=1` build (re-reads the copied bank after every image,
+    worst mismatch count at HUD row 1 left) stays 00 while turning,
+    walking and using the map. That build runs at ~5 fps.
+- Build Y (speed round 3, HUD marker Y): profiler at the start view
+  4.08 -> 4.04 frames per image (~14.7 -> ~14.9 fps, HUD 14-15).
+  Stage lines per image: logic 51 -> 47, render 319, copy 198 -> 196,
+  sprite_update 51, rest 4. Three changes, each checked on its own:
+  - `src/billboard.s`: `draw_art` in asm, writing `shadow_OAM` directly
+    (same sdcccall(1) signature; the epilogue must pop SDCC's stack
+    arguments). 3,336 -> 1,041 T for random art, 6,115 -> 1,816 T for
+    a 3x2 billboard. OAM, return slot and SP identical on 4,008 random
+    inputs; OAM identical on all 408 bench views.
+  - `src/ai.h`: `ai_step` in inline asm (sdcccall(1), styled after
+    `ai_bfs`), 982 -> 518 T per step, a full 8-enemy AI tick 8,090 ->
+    4,378 T. Identical state (ex/ey, imap, BFS, flags) after every tick
+    over 500 random mazes x 25 ticks.
+  - `src/render.s`: a piece end in mode 0 hands straight to the next
+    piece's burst instead of polling for the next mode 2 (modes 1-3
+    still sync; a mode-3 handover cannot keep 40 T of store slack).
+    copysim: 238 -> 233 lines per copy (-2,245 T), spans 231 -> 227;
+    chain burst slack unchanged (>= 48 T). Less than the 15-25 lines
+    the plan hoped for: the sync it replaces already bursts on the next
+    line's mode 0.
+  - `tools/sim/bench.py --cmp` compared a copied bank against vbuf,
+    which build V no longer fully writes; it now compares the two copied
+    banks (0/408 views differ, base vs Y).
+  - `src/render.s` odd-column pass: k stays in DE for the pass, the
+    per-column arrays are walked with one pointer (+64 per array)
+    instead of address math per array, and k=63 is peeled out.
+    15,170 -> 11,884 T for od_loop, -3,519 T/view over 60 bench views
+    (every view faster; worst only -600). Gearboy start view, 64-image
+    runs: render 319.0 -> 308.2 lines/image, total 622.0 -> ~617 lines
+    (~15 fps).
+  - Tried and reverted: PLAN's S4 (ragged rows written once, merged via
+    a coverage mask). -3,038 T/view over 400 random views but +6.3
+    lines/image at the gearboy start view, where the near walls make
+    almost every row ragged; the start view is the speed gate.
+  - Checked in gearboy: start, turn, walk, shoot, map, floor 2, CHECK
+    00 throughout. Not yet run on a physical DMG.
 - ROM: ~22 KB of 32 KB used (no MBC). Saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
@@ -366,6 +402,9 @@ tiles).
 
 - sdasgb has no `ld hl,(nn)` / `ld (nn),hl` and no `neg` (use `cpl/inc`).
   Use HRAM byte pairs via `ldh` for 16-bit pointers in ISRs.
+- An unclosed `.rept` in sdasgb silently stops emitting code (the link
+  then fails on undefined symbols much later). Close it with `.endm`
+  (`.endr` is not accepted).
 - `__at(addr)` HRAM variables get mangled into undefined hash symbols by
   SDCC; use pointer-cast macros like GBDK's register map.
 - SDCC: `uint8_t` loop counters against 1024 never terminate (warning 94);

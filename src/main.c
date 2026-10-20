@@ -414,30 +414,8 @@ static uint8_t item_tier(int16_t fwd)
 }
 
 /* One billboard from sprites.h art {w, h, tile|flip...}, bottom centre at
- * screen (x, y). Returns the next free OAM slot. */
-static uint8_t draw_art(uint8_t si, const uint8_t *a, uint8_t x, uint8_t y, uint8_t pal)
-{
-    uint8_t w = a[0], h = a[1], r, c, t, ox;
-    uint8_t x0 = (uint8_t)(x - (w << 2) + 8u);          /* OAM = screen + (8, 16) */
-    uint8_t oy = (uint8_t)(y - (h << 4) + 16u);
-
-    a += 2;
-    for (r = 0u; r < h; r++) {
-        ox = x0;
-        for (c = 0u; c < w; c++) {
-            if (si >= MAX_SPR) return si;
-            t = *a++;
-            set_sprite_tile(si, (uint8_t)(t & 0xFEu));
-            if (t & 1u) set_sprite_prop(si, (uint8_t)(pal | S_FLIPX));
-            else        set_sprite_prop(si, pal);
-            move_sprite(si, ox, oy);
-            si++;
-            ox += 8u;
-        }
-        oy += 16u;
-    }
-    return si;
-}
+ * screen (x, y). Returns the next free OAM slot. src/billboard.s. */
+uint8_t draw_art(uint8_t si, const uint8_t *a, uint8_t x, uint8_t y, uint8_t pal);
 
 /* A: hitscan the nearest visible enemy overlapping the screen centre. */
 static void shoot(void)
@@ -898,7 +876,7 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('V') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('Y') - FONT_BASE) << 4]);
     set_bkg_data(T_L, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
     set_bkg_data(T_R, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
     frame_init();

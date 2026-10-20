@@ -121,18 +121,6 @@ lf_pair:
         ld      (hl), a
         .endm
 
-; OD_AVG arr, DE = k: arr[k] = (arr[k-1] + arr[k+1]) / 2. Keeps DE.
-        .macro  OD_AVG arr
-        ld      hl, #(arr - 1)
-        add     hl, de
-        ld      a, (hl+)
-        inc     hl
-        add     a, (hl)
-        rra                            ; 9-bit sum / 2
-        dec     hl
-        ld      (hl), a
-        .endm
-
 ; ---------------------------------------------------------------
 ; ray_cs: cast column _r_k along (r_dxs[k], r_dys[k]). Stores r_top,
 ; r_bot, r_zb (perp in 1/8 cells), r_wt, r_clr (base colour), r_hits and
@@ -491,69 +479,80 @@ e2_next:
         cp      #62
         jr      C, e2_loop
 
-        ; ---- odd columns
-        ld      a, #1
-        ld      (_r_k), a
+        ; ---- odd columns. DE = k (ray_cs returns it, ed_cmp keeps it),
+        ; BC = the 64-byte array stride, and the averages/wt/clr come from
+        ; one pointer walk from r_top instead of one address per array.
+        ; wt[k], clr[k], hits[k] and the averages are written before the
+        ; checks: if a check fails, ray_cs rewrites every per-column value.
+        ld      bc, #64
+        ld      de, #1                 ; k
 od_loop:
-        ld      a, (_r_k)
-        cp      #63
-        jr      Z, od_cast
-        ld      e, a
-        ld      d, #0
-        ld      hl, #(_r_wt - 1)
+        ld      hl, #_r_top
         add     hl, de
-        ld      a, (hl+)               ; wt[k-1]
+        ; top, bot, zb: [k] = ([k-1] + [k+1]) / 2
+        .rept   3
+        dec     hl
+        ld      a, (hl+)
         inc     hl
-        cp      (hl)                   ; wt[k+1]
+        add     a, (hl)
+        rra
+        dec     hl
+        ld      (hl), a
+        add     hl, bc
+        .endm
+        ; wt[k] = wt[k-1] unless the faces differ
+        dec     hl                     ; &wt[k-1]
+        ld      a, (hl+)
+        ld      (hl), a                ; wt[k]
+        inc     hl                     ; &wt[k+1]
+        cp      (hl)
         jr      NZ, od_cast
+        ; clr[k] = clr[k+1]
+        add     hl, bc                 ; &clr[k+1]
+        ld      a, (hl-)
+        ld      (hl), a
+        ; hits[k] = hits[k-1] unless the cells differ (C/B clobber the
+        ; stride; od_next reloads it)
         ld      hl, #(_r_hits - 2)
         add     hl, de
-        add     hl, de
+        add     hl, de                 ; &hits[k-1]
         ld      a, (hl+)
-        ld      c, a                   ; hits[k-1]
+        ld      c, a
         ld      a, (hl+)
-        ld      b, a
+        ld      b, a                   ; hits[k-1]
+        ld      a, c
+        ld      (hl+), a               ; hits[k].lo
+        ld      (hl), b                ; hits[k].hi
         inc     hl
-        inc     hl
-        ld      a, (hl+)               ; hits[k+1]
+        ld      a, (hl+)               ; hits[k+1].lo
         cp      c
         jr      NZ, od_cast
         ld      a, (hl)
         cp      b
         jr      NZ, od_cast
-        ; same cell and face: copy hits/wt, average top/bot/zb
-        ld      hl, #_r_hits
-        add     hl, de
-        add     hl, de
-        ld      a, c
-        ld      (hl+), a
-        ld      (hl), b
-        ld      hl, #(_r_wt - 1)
-        add     hl, de
-        ld      a, (hl+)
-        ld      (hl), a
-        OD_AVG  _r_top
-        OD_AVG  _r_bot
-        OD_AVG  _r_zb
-        ld      hl, #(_r_clr + 1)
-        add     hl, de
-        ld      a, (hl-)
-        ld      (hl), a
-        jr      od_next
-od_cast:
-        call    ray_cs                 ; keeps DE = k
-        call    ed_cmp                 ; edge between k-1 and k
+od_next:
+        ld      bc, #64
+        inc     de
+        inc     de
         ld      a, e
         cp      #63
-        jr      Z, od_next
+        jr      C, od_loop
+        ; column 63 is always cast
+        ld      a, #63
+        ld      (_r_k), a
+        call    ray_cs
+        call    ed_cmp                 ; edge between 62 and 63
+        jr      od_done
+od_cast:
+        ld      a, e
+        ld      (_r_k), a              ; ray_cs reads r_k
+        call    ray_cs                 ; returns DE = k
+        call    ed_cmp                 ; edge between k-1 and k
         inc     de
         call    ed_cmp                 ; edge between k and k+1
-od_next:
-        ld      a, (_r_k)
-        add     a, #2
-        ld      (_r_k), a
-        cp      #64
-        jr      C, od_loop
+        dec     de                     ; DE = k again for od_next
+        jr      od_next
+od_done:
 
         ; ---- colour pass. r_clr = left | right << 2 (2-bit colours):
         ; x-facing wall 0, y-facing wall 1, door 2; the first column on a new
@@ -1434,7 +1433,16 @@ cv_loop:
 ;   pairs (halt ~300 T after L's request), others 6 V / 9 U (~228 /
 ;   ~220 T bursts, halt ~400-430 of >= 443). LY is L or L + 1 here, so
 ;   the band starts a line early.
-; - piece ends take the pairs left (fewer than a burst), then sync.
+; - piece ends take the pairs left (fewer than a burst), then hand the next
+;   piece to the chain instead of syncing when the arm (~200 T) fits before
+;   the next mode-0 request. Only mode 0 qualifies: the request has passed,
+;   so the next one is >= 253 T away (the worst halt bug is ~11 T, and the
+;   burst it starts late still fits any mode 0). In mode 2 the request is
+;   only >= 172 T away and in mode 3 it is 1..L3 T away (L3 up to 289), so
+;   those sync: a handover burst that starts inside the request would need
+;   mode 0 to be >= 40 T longer than it can be on a sprite line. Mode 1
+;   syncs (its VBlank path). chained pieces are contiguous in VRAM, so the
+;   burst only swaps the source.
 ; The first instruction after each halt is safe to run twice (halt bug),
 ; so a halt that comes late only starts its burst late; tails start with
 ; a nop. A chain reaching LY 143 syncs instead, so no IF write lands near
@@ -1732,9 +1740,17 @@ cw_tail:                               ; 1-5 pairs, fewer than the burst (<= 2 o
         nop
         BYTE
         BYTE
-cw_segend:
-        call    cw_next
-        jp      NZ, cw_sync
+cw_segend:                             ; piece end: hand the next piece's
+        call    cw_next                ; first burst to the chain when the
+        jr      Z, cw_end              ; next mode-0 request is far enough for
+        ldh     a, (STATR)             ; its arm (~200 T), instead of
+        and     #3                     ; polling for mode 2; the pieces are
+        jr      Z, 1$                  ; contiguous in VRAM, so the burst just
+        jp      cw_sync                ; swaps the source
+1$:     ldh     a, (_h_typ)            ; mode 0: the request has passed, the
+        or      a                      ;   next is >= 253 T away
+        jr      NZ, cu_chain
+        jp      cw_chain
 cw_end:
         xor     a
         ldh     (STATR), a

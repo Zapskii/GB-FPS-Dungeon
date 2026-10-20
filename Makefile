@@ -3,7 +3,7 @@
 #   make clean
 
 ROM    = dungeon.gb
-SRCS   = src/main.c src/isr.c src/render.s src/math.s src/rtabs.s
+SRCS   = src/main.c src/isr.c src/render.s src/math.s src/rtabs.s src/billboard.s
 DEPS   = $(wildcard src/*.h)
 RUN    := docker run --rm -u $(shell id -u):$(shell id -g) -v "$(CURDIR)":/work -w /work gbdk-dev
 LCC    := /opt/gbdk/bin/lcc

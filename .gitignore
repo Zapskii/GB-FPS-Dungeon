@@ -18,3 +18,4 @@ tools/sim/venv/
 tools/sim/bw/
 tools/sim/base/
 tools/sim/*.pkl
+tools/sim/baseY/
