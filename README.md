@@ -254,7 +254,7 @@ base 160 (`src/hud.h`, 23 tiles; the comments there still say base 40).
   U, V, Y next.
 - ROM: ~18 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
-- Builds 5–I are not yet checked on hardware: effects were tuned without
+- Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking). Builds 5–I are not yet checked on a real DMG: effects were tuned without
   listening, an AI rebuild in an open room can take ~1 frame, and the gun
   adds up to 3 sprites per scanline (10-per-line limit with enemies/items).
 - Free shared tiles: 183, 197–205, 255 (156–159 free for sprites); health
