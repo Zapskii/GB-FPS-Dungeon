@@ -298,7 +298,7 @@ tiles).
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
   marker shows blank: the font has no H (or B) - next markers U, V, Y
   (I, L, M, P, R, T used).
-- ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
+- ROM: ~21 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
   Still worth watching: an AI rebuild in an open room can take ~1 frame.
