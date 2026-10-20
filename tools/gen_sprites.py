@@ -10,8 +10,8 @@ OUT_H = sys.argv[1] if len(sys.argv) > 1 else "src/sprites.h"
 OUT_PNG = sys.argv[2] if len(sys.argv) > 2 else "sprites_preview.png"
 
 # free OBJ pairs in the shared tiles (main.c: 154 = map arrow; 160-183 HUD,
-# 184-196 font only during text screens, 244-254 frame)
-PAIRS = [156, 158] + list(range(184, 244, 2))
+# 184-196 font only during text screens, 238-239 banner L/R, 244-254 frame)
+PAIRS = [156, 158] + list(range(184, 238, 2)) + [240, 242]
 
 GRUNT = [
 [  # far 8x16

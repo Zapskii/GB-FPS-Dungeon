@@ -94,6 +94,18 @@ static void game_over(void);
 static uint8_t hud_last_floor = 0xFFu;
 
 #define WM(r,c) (*(uint8_t *)(0x9C00u + (r) * 32u + (c)))
+#define BM(r,c) (*(uint8_t *)(0x9800u + (r) * 32u + (c)))
+
+/* "FLOOR n" banner over view tile row 1 for BANNER_T frames after a level
+ * loads, written by the VBL ISR (hud_update). L and R are not in the HUD
+ * set: init_screen copies them from the font into free tiles 238-239. */
+#define BANNER_T   90u                  /* 1.5 s */
+#define BANNER_ROW 5u                   /* BG row = view tile row 1 */
+#define BANNER_COL 5u                   /* 9 tiles, centred in view cols 2..17 */
+#define T_L 238u
+#define T_R 239u
+static volatile uint8_t banner_t;       /* frames left; 0 = off */
+static uint8_t banner_on;               /* banner tiles are in the BG map */
 
 /* ---- enemies ---- */
 #define NENEMY 8u
@@ -152,6 +164,7 @@ static void load_level(uint8_t n)
 
     level_no = n;
     floor_no = (uint8_t)(n + 1u);
+    banner_t = BANNER_T;
     keys = 0u;
     item_n = 0u;
     for (i = 0u; i < 1024u; i++) {
@@ -731,6 +744,23 @@ void hud_update(void)                    /* called from the VBL ISR */
         WM(0, 8) = HUD_DIGIT(floor_no);
         hud_last_floor = floor_no;
     }
+    if (banner_t) {                      /* " FLOOR n " in HUD glyphs on white */
+        BM(BANNER_ROW, BANNER_COL)      = T_WHITE;
+        BM(BANNER_ROW, BANNER_COL + 1u) = HUD_F;
+        BM(BANNER_ROW, BANNER_COL + 2u) = T_L;
+        BM(BANNER_ROW, BANNER_COL + 3u) = HUD_DIGIT(0);
+        BM(BANNER_ROW, BANNER_COL + 4u) = HUD_DIGIT(0);
+        BM(BANNER_ROW, BANNER_COL + 5u) = T_R;
+        BM(BANNER_ROW, BANNER_COL + 6u) = T_WHITE;
+        BM(BANNER_ROW, BANNER_COL + 7u) = HUD_DIGIT(floor_no);
+        BM(BANNER_ROW, BANNER_COL + 8u) = T_WHITE;
+        banner_on = 1u;
+        banner_t--;
+    } else if (banner_on) {              /* view tiles back: index = col * 8 + row */
+        for (uint8_t c = BANNER_COL; c < BANNER_COL + 9u; c++)
+            BM(BANNER_ROW, c) = (uint8_t)(((c - 2u) << 3) + (BANNER_ROW - 4u));
+        banner_on = 0u;
+    }
 }
 
 
@@ -819,6 +849,8 @@ static void text_screen(const char *l1, const char *l2, const char *l3, const ch
     uint8_t i;
 
     for (i = 0u; i < MAX_SPR; i++) move_sprite(i, 0u, 0u);
+    banner_t = 0u;                       /* the ISR must not touch the text */
+    banner_on = 0u;
     DISPLAY_OFF;
     set_bkg_data(FONT_BASE, 13u, font_tiles);
     for (i = 0u; i < 18u; i++) banner(i, "");
@@ -883,7 +915,9 @@ static void init_screen(void)
     set_bkg_data(T_BLACK, 2u, tiles[0]);
     set_bkg_data(HUD_BASE, 23u, hud_tiles);
     set_bkg_data(HUD_GOLD, 1u, gold_tile);
-    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('P') - FONT_BASE) << 4]);
+    set_bkg_data(T_MARKER, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
+    set_bkg_data(T_L, 1u, &font_tiles[(uint16_t)(glyph('L') - FONT_BASE) << 4]);
+    set_bkg_data(T_R, 1u, &font_tiles[(uint16_t)(glyph('R') - FONT_BASE) << 4]);
     frame_init();
     draw_frame();
 

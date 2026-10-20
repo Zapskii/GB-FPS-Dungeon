@@ -12,7 +12,7 @@ hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build marker: the character in the middle of the HUD's bottom row (now
-**P**; 1–9 then letters) identifies the current build; it changes between
+**R**; 1–9 then letters) identifies the current build; it changes between
 hand-offs.
 
 ## Build
@@ -209,6 +209,11 @@ afterwards. The build marker glyph is copied into BG tile 255.
 
 ### HUD
 
+Arriving on a floor shows a white " FLOOR n " strip across view tile
+row 1 for 1.5 s (`banner_t`). The VBL ISR writes it into the BG map and
+afterwards puts the view tile indices back; `text_screen()` cancels it.
+L and R are copied from the font into tiles 238–239 at boot.
+
 Window row 0: 5 hearts, `K n`, `F n`, gem + 2-digit gold (gem = BG tile
 183), compass `N E S W` with the facing cardinal inverted. Row 1: the
 build marker and the FPS counter. Tiles at base 160 (`src/hud.h`, 23
@@ -238,6 +243,7 @@ tiles).
 | Speed | adaptive rays, log side distances, PLAN.md waves 1–4: 6.5 → ~10.75 fps (builds D–I) |
 | Variety | bats, gold and map items, item size tiers, sprite generator (build L) |
 | Sprite polish | gun lowers (M) then slides (P) over items; nearest-first, line-budgeted billboards (M) |
+| Floor banner | "FLOOR n" across the view for 1.5 s on arrival (build R) |
 
 ## Constraints & next steps
 
@@ -285,8 +291,8 @@ tiles).
   cell once per image, sd_lu/od_avg inlined. Byte-identical to H on 5,300
   random views. Profiler: render_asm 3.31 -> 2.63 frames (-47.8k T);
   total 5.58 frames per image (~10.75 fps, HUD 10-11). Build H's HUD
-  marker shows blank: the font has no H (or B) - next markers R, T, U,
-  V, Y (I, L, M, P used).
+  marker shows blank: the font has no H (or B) - next markers T, U, V, Y
+  (I, L, M, P, R used).
 - ROM: ~20 KB of 32 KB used (no MBC). Music, saves or more floors need an
   MBC5 switch (`-Wl-yt0x1B`). WRAM: ~6 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
@@ -294,11 +300,12 @@ tiles).
 - Build L (enemy types, items, item size tiers) tested OK in mGBA and on
   a physical DMG (2026-10-20). Build M (lowered gun, sprite line budget):
   gun drop confirmed by the user. Build P (gun slides instead of jumping):
-  confirmed working by the user (2026-10-20).
-- Free shared tiles: OBJ pairs 238–243 (3 pairs); none free for BG.
+  confirmed working by the user (2026-10-20). Build R (floor banner):
+  checked in gearboy.
+- Free shared tiles: 240–243 (2 OBJ pairs or 4 BG tiles); 238–239 hold
+  the banner's L and R.
 - Decided: stairs stay one-way (no going back up a floor).
-- Ideas not done: a "FLOOR n" banner on arrival (the HUD `F n` is easy to
-  miss), a third enemy type (needs ~12 tiles with mirrored art, or reuse
+- Ideas not done: a third enemy type (needs ~12 tiles with mirrored art, or reuse
   grunt art one tier larger as a "brute"), full wall textures.
   `textures.h` is dead.
 - Test display-path changes in **mGBA or hardware** — gearboy does not
