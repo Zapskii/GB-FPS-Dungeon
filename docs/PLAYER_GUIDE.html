@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GB-FPS-Dungeon Player Guide</title>
+<style>
+  :root {
+    --bg: #e0f8d0; --fg: #081820; --muted: #346856; --card: #c8e8b4;
+    --line: #88c070; --sprite-bg: #081820;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #081820; --fg: #e0f8d0; --muted: #88c070; --card: #102a30; --line: #346856; }
+  }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 system-ui, -apple-system, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.9rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 1.3rem; margin: 2.2em 0 0.6em; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
+  .lede { color: var(--muted); margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 0.5em 0 1em; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  kbd {
+    font: 0.85em ui-monospace, monospace; background: var(--card);
+    border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; white-space: nowrap;
+  }
+  .cards { display: grid; gap: 12px; }
+  .card {
+    display: grid; grid-template-columns: 88px 1fr; gap: 16px; align-items: center;
+    background: var(--card); border-radius: 10px; padding: 12px;
+  }
+  .card img, .card .ph {
+    width: 88px; height: 88px; object-fit: contain; image-rendering: pixelated;
+    background: var(--sprite-bg); border-radius: 6px;
+  }
+  .card .ph { display: grid; place-items: center; color: #88c070; font-size: 0.75rem; text-align: center; }
+  .card h3 { margin: 0 0 2px; font-size: 1.05rem; }
+  .card p { margin: 0; }
+  ul { padding-left: 1.2em; }
+  li { margin: 0.3em 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>GB-FPS-Dungeon: Player Guide</h1>
+  <p class="lede">You wake on the first of four floors of a dungeon. Each floor is a new random maze.
+  Find the key, open the door, take the stairs down. Clear floor 4 to escape.</p>
+
+  <h2>Controls</h2>
+  <table>
+    <tr><th>Button</th><th>Action</th></tr>
+    <tr><td><kbd>Up</kbd> / <kbd>Down</kbd></td><td>Walk forward / back</td></tr>
+    <tr><td><kbd>Left</kbd> / <kbd>Right</kbd></td><td>Turn</td></tr>
+    <tr><td><kbd>B</kbd> + <kbd>Left</kbd> / <kbd>Right</kbd></td><td>Strafe (sidestep)</td></tr>
+    <tr><td><kbd>A</kbd></td><td>Shoot (about 4 shots a second, aims at screen centre)</td></tr>
+    <tr><td><kbd>Select</kbd></td><td>Open the automap (the game pauses)</td></tr>
+  </table>
+  <p>On the automap:</p>
+  <table>
+    <tr><th>Button</th><th>Action</th></tr>
+    <tr><td><kbd>Select</kbd> or <kbd>A</kbd></td><td>Close the map</td></tr>
+    <tr><td><kbd>B</kbd></td><td>Music on / off</td></tr>
+    <tr><td><kbd>Start</kbd></td><td>Save to a slot</td></tr>
+  </table>
+
+  <h2>The screen</h2>
+  <ul>
+    <li><strong>Top row of the HUD:</strong> your hearts (up to 5), <code>K</code> keys held, <code>F</code> current
+      floor, a gem and your gold count, and a compass. The letter for the way you're facing is highlighted.</li>
+    <li><strong>Bottom row:</strong> build number and frames per second. You can ignore these.</li>
+  </ul>
+
+  <h2>Items</h2>
+  <p>Items are white. They get bigger as you walk closer. To pick one up, walk over it.</p>
+  <div class="cards">
+    <div class="card"><img src="img/key2.png" alt="Key sprite">
+      <div><h3>Key</h3><p>Opens a door. It always lies in the dead end farthest from where you start.
+      Keys don't carry over to the next floor.</p></div></div>
+    <div class="card"><img src="img/health2.png" alt="Heart sprite">
+      <div><h3>Heart</h3><p>Gives back one heart. If your hearts are full, it stays where it is, so you can
+      come back for it later. Each floor has 2.</p></div></div>
+    <div class="card"><img src="img/gold2.png" alt="Gem sprite">
+      <div><h3>Gem</h3><p>Adds to your gold. Each floor has 2. Your total shows on the win and game-over screens.</p></div></div>
+    <div class="card"><img src="img/map2.png" alt="Map scroll sprite">
+      <div><h3>Map scroll</h3><p>Shows the whole floor on the automap.</p></div></div>
+    <div class="card"><img src="img/stairs2.png" alt="Stairs (down arrow) sprite">
+      <div><h3>Stairs (down arrow)</h3><p>Takes you to the next floor. You can't come back up.
+      On floor 4 they lead outside, and you win.</p></div></div>
+  </div>
+  <p><strong>Doors</strong> are the dark grey wall blocks marked <strong>D</strong>. Walk into one while you
+  have a key to open it. The stairs are always in a small room behind the door, so you need the key first.</p>
+
+  <h2>Enemies</h2>
+  <p>Enemies hunt you through the corridors and hurt you on contact. When you get hit the screen flashes.
+  When an enemy takes a shot but survives, it flashes white and stops for a moment.</p>
+  <div class="cards">
+    <div class="card"><img src="img/grunt2.png" alt="Grunt sprite" style="background:#88c070">
+      <div><h3>Grunt</h3><p>The dark blob. Dies to 1 shot on floors 1–2 and needs 2 shots on floors 3–4.</p></div></div>
+    <div class="card"><img src="img/bat2.png" alt="Bat sprite" style="background:#88c070">
+      <div><h3>Bat</h3><p>Flies at eye level and moves twice as fast as a grunt, but one shot kills it.
+      Floor <em>n</em> has <em>n</em> bats.</p></div></div>
+    <div class="card"><img src="img/grunt2.png" alt="Brute sprite (a bigger grunt)" style="background:#88c070">
+      <div><h3>Brute</h3><p>Looks like a grunt drawn one size bigger. Slow (half grunt speed) and takes 3 shots.
+      1 on floor 3, 2 on floor 4.</p></div></div>
+  </div>
+  <p>Enemies more than about 10 steps away stay still until you come closer.</p>
+
+  <h2>Saving and loading</h2>
+  <p>There are 3 save slots, and each save also keeps the floor number.</p>
+  <ul>
+    <li><strong>To save:</strong> press <kbd>Select</kbd> to open the map, then <kbd>Start</kbd>. Choose a slot
+      with <kbd>Left</kbd> / <kbd>Right</kbd> and press <kbd>Start</kbd> or <kbd>A</kbd>. <kbd>B</kbd> cancels.</li>
+    <li><strong>To load:</strong> once you have a save, the title and GAME OVER screens show
+      <strong>A LOAD SAVE</strong>. Press <kbd>A</kbd>, choose the slot, and you continue from where you saved.</li>
+  </ul>
+
+  <h2>Winning and losing</h2>
+  <ul>
+    <li><strong>Losing all your hearts</strong> ends the run. The GAME OVER screen shows the floor you reached,
+      your kills and your gold.</li>
+    <li><strong>Taking the stairs on floor 4</strong> wins the game. The win screen shows your kills, your time
+      in seconds (time on the map doesn't count) and your gold.</li>
+  </ul>
+  <p>Press <kbd>Start</kbd> on either screen to begin a new run.</p>
+
+  <h2>Tips</h2>
+  <ul>
+    <li>Strafe (<kbd>B</kbd> + <kbd>Left</kbd>/<kbd>Right</kbd>) to look around a corner without walking into an enemy.</li>
+    <li>Check the map often. Scrolls show the whole floor, and the map pauses the game, so you can plan your route.</li>
+    <li>Bats are fast but weak. Turn to face them and shoot.</li>
+    <li>On floors 3–4, back away while you shoot brutes. They're too slow to catch you.</li>
+    <li>If you're at full health, leave the heart. It'll still be there when you need it.</li>
+  </ul>
+</main>
+</body>
+</html>
