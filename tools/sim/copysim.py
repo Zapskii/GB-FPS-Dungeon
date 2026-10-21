@@ -6,6 +6,9 @@ import bench, ppusim
 src = sys.argv[1]
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 40
 rom, S = bench.build(src)
+CK = S.get('_c_key'); BK = S.get('_b_key')   # C5b column keys (render.s) and their pre-copy backup (bench.inc -DHAVE_KEY)
+if CK is not None and BK is None: print('_c_key but no _b_key (bench built without -DHAVE_KEY): c_key not restored')
+SKIP = collections.Counter()
 from pyboy import PyBoy
 pb = PyBoy(rom, window='null', sound_emulated=False)
 pb.set_emulation_speed(0)
@@ -46,6 +49,16 @@ for v in bench.views(n):
             raw[S['_r_vh']:S['_r_vh'] + 64] = raw[S['_b_vh']:S['_b_vh'] + 64]   # history before the bench's copy
             if mode == 'full':
                 for k in range(32): raw[S['_r_vh'] + k] = 0; raw[S['_r_vh'] + 32 + k] = 64
+            if BK is not None: raw[CK:CK + 512] = raw[BK:BK + 512]   # keys before the bench's copy
+            if CK is not None and mode == 'full':
+                for k in range(32): raw[CK + 16 * k] = 0xFF               # view_reset invalidates them
+            if CK is not None:                                            # c_desc: undo the bench copy's skips
+                CD = S['_seen'] + 1024
+                for c in range(16):
+                    d = CD + 8 * c
+                    if raw[d] == raw[d + 3]:
+                        raw[d + 1], raw[d + 2] = raw[d + 6], raw[d + 7]
+                        raw[d + 6] = min(raw[S['_r_top'] + 4 * c:S['_r_top'] + 4 * c + 4]); raw[d + 7] = max(raw[S['_r_bot'] + 4 * c:S['_r_bot'] + 4 * c + 4])
             raw[0xFFFF] = 0x01
             l3 = []
             lo = min(ys) - 16 if ys else 999
@@ -59,6 +72,7 @@ for v in bench.views(n):
                     l3.append(rnd.randrange(172, 290) if lo <= y <= hi else 172 + win + rnd.randrange(0, 3))
             dst = raw[S['_r_dst']] | raw[S['_r_dst'] + 1] << 8
             ref = bytes(raw[dst:dst + 2048])       # the bench's copy of this image
+            if CK is not None: kb = CK + (256 if dst >= 0x9000 else 0); k0 = bytes(raw[kb:kb + 256])
             raw[dst:dst + 2048] = bytes(2048) if mode == 'full' else raw[dst:dst + 2048]
             sim = ppusim.Sim(raw, l3, t0=rnd.randrange(154 * 456), isr_t=rnd.randrange(2500, 4500))
             try:
@@ -73,6 +87,9 @@ for v in bench.views(n):
                 stats['late_halts'] += 1
                 if lt > LATE[0]: LATE[0] = lt; print('latest halt %d T late at %04X (%s %s)' % (lt, lpc, model, mode))
             if model == 'sprites': tot_t.append((mode, t, sim.writes))
+            if CK is not None and model == 'sprites':   # the skip rule: this bank's valid key == the column's 16 ray bytes
+                SKIP[mode] += sum(k0[16 * c] != 0xFF and k0[16 * c:16 * c + 16] == b''.join(
+                    raw[S[a] + 4 * c:S[a] + 4 * c + 4] for a in ('_r_top', '_r_bot', '_r_wt', '_r_clr')) for c in range(16))
             if model == 'sprites' and mode == 'spans': PCS.update(sim.pcs); PCC.update(sim.pcc); NV[0] += 1; HALT[0] += t - sum(sim.pcc.values())
             for k, vv in sim.pcslack.items(): PSL[k] = min(PSL.get(k, 10 ** 9), vv)
             if sim.slack < minslack: minslack = sim.slack; print('new min slack', sim.slack, model, mode, 't=%d line %d x %d pc %04X L3 %d' % sim.slack_at)
@@ -83,7 +100,8 @@ for mode in ('full', 'spans'):
     xs = [(t, w) for m, t, w in tot_t if m == mode]
     print('%-5s copy %.0f T = %.0f lines, %.0f bytes, %.2f bytes/line' % (
         mode, sum(t for t, w in xs) / len(xs), sum(t for t, w in xs) / len(xs) / 456,
-        sum(w for t, w in xs) / len(xs), sum(w for t, w in xs) / sum(t for t, w in xs) * 456))
+        sum(w for t, w in xs) / len(xs), sum(w for t, w in xs) / sum(t for t, w in xs) * 456)
+        + (', %.2f cols skipped' % (SKIP[mode] / len(xs)) if CK is not None else ''))
 
 import re, subprocess
 w = os.path.join(bench.HERE, 'bw', 'src')

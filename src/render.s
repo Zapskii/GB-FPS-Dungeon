@@ -33,6 +33,8 @@ c_desc:         .ds     8*16           ; per tile column, for copy_view: rows T,
                                        ; core start, core end, B (pieces between
                                        ; them), lo, hi, min top, max bot
 r_uni:          .ds     1              ; fill_col: this column's core is uniform
+_c_key::        .ds     512            ; copy_view: per bank (256) and tile column
+                                       ; (16): the 16 ray bytes that bank holds
 
 ; per-image and per-ray scalars, ldh-addressable
         .area   _HRAM
@@ -1439,6 +1441,20 @@ cv_loop:
 ; ray; else the core is empty and vbuf has it), V [core end, b). Phase 1
 ; (interrupts on) unites the spans and finds the band of lines the shadow
 ; OAM's sprites cover; cw_next walks the pieces.
+; Column skip: a column's pixels depend only on its 4 rays' r_top, r_bot,
+; r_wt (mortar) and r_clr (lo/hi, fog) (fill_col, mo_col), so c_key keeps
+; per bank and column those 16 bytes as last copied there. Phase 1 compares
+; them (tops first, early exit; 40 T a byte). Equal: the bank already
+; has the column: c_desc + 0..3 = 0 (no pieces) and the core moves to
+; + 6, + 7, where check_view takes it when T == B (never for a copied
+; column: tops <= 31 < 33 <= bots). Differ: the bytes from the first
+; difference on go into the key (24 T a byte). r_vh is written as
+; before (equal key, equal span). Exact by induction: after every copy, each column of the
+; bank is the full image column of its key. view_reset (C) writes 0xFF
+; into each key's first byte (tops <= 31: never equal) whenever the banks
+; were written otherwise (boot, level load, the map). All 16 skipped (a
+; still view): phase 2 ends at once. Costs ~8k T (~18 lines) on a view
+; sharing no column with the bank, ~0.9k T a skipped column.
 ; Phase 2 streams the pieces with IME = 0 and IE = STAT (mode-0 request;
 ; no dispatch at IME = 0). A burst halts until mode 0 starts; mode 0 plus
 ; the next mode 2 stay open 456 - mode 3 T: >= 167 (mode 3 <= 289 T) on
@@ -1578,6 +1594,191 @@ cw_col:
         ldh     (_h_cnt), a
         jr      NZ, cw_col
 
+        ; ---- column keys: a column whose 16 ray bytes (r_top, r_bot, r_wt,
+        ; r_clr at 4 tc..+3) equal this bank's key is already in the bank:
+        ; all its pieces empty. Otherwise copy the bytes from the first
+        ; difference on into the key. Both ways end at HL = src + 260, DE =
+        ; the next key.
+        ldh     a, (_h_bank)
+        and     #0x10
+        swap    a                      ; 0x80 -> 0, 0x90 -> 1
+        add     a, #>_c_key
+        ld      d, a
+        ld      e, #<_c_key            ; DE = this bank's keys
+        ld      hl, #_r_top
+        ld      bc, #60
+        jr      ky_col
+ky_eq:                                 ; equal: DE = key + 16
+        push    hl
+        ld      a, e
+        sub     #<(_c_key + 16)        ; 16 tc
+        rrca                           ; 8 tc
+        add     a, #<c_desc
+        ld      l, a
+        ld      a, #>c_desc
+        adc     a, #0
+        ld      h, a                   ; HL = this column's c_desc
+        xor     a
+        ld      (hl+), a               ; T
+        ld      c, (hl)                ; core start
+        ld      (hl+), a
+        ld      b, (hl)                ; core end
+        ld      (hl+), a
+        ld      (hl+), a               ; B: T = core = B = 0, no pieces
+        inc     hl
+        inc     hl
+        ld      (hl), c                ; the core for check_view (+6, +7;
+        inc     hl                     ;   min top / max bot are used up)
+        ld      (hl), b
+        pop     hl
+        ld      bc, #60
+        jp      ky_nx
+ky_col:                                ; tops first: most misses end here
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 30$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 31$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 32$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 33$
+        inc     hl
+        inc     de
+        add     hl, bc                 ; next array (+64)
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 34$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 35$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 36$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 37$
+        inc     hl
+        inc     de
+        ld      c, #124
+        add     hl, bc                 ; bots -> wt (+128)
+        ld      c, #60
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 38$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 39$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 40$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 41$
+        inc     hl
+        inc     de
+        add     hl, bc                 ; next array (+64)
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 42$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 43$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 44$
+        inc     hl
+        inc     de
+        ld      a, (de)
+        cp      (hl)
+        jr      NZ, 45$
+        inc     hl
+        inc     de
+        jp      ky_eq
+30$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+31$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+32$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+33$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        add     hl, bc
+34$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+35$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+36$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+37$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        ld      c, #124
+        add     hl, bc
+        ld      c, #60
+38$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+39$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+40$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+41$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        add     hl, bc
+42$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+43$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+44$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+45$:    ld      a, (hl+)
+        ld      (de), a
+        inc     de
+ky_nx:
+        dec     h                      ; HL = the next column's tops
+        ld      a, e
+        cp      #<_c_key               ; 16 keys of 16 bytes: E wraps back
+        jp      NZ, ky_col
+
         ; ---- sprite band: lines [min y - 16, max y - 1] of the 8x16 OBJ
         ; with OAM y in 1..159 (0 = hidden); none: line 200, so no LY hits
         ld      hl, #_shadow_OAM
@@ -1628,7 +1829,8 @@ cw_col:
         ldh     (STATR), a             ; STAT request on mode 0
         ld      a, #0x02
         ldh     (IER), a               ; only it ends a halt
-        call    cw_next                ; there is always one
+        call    cw_next
+        jp      Z, cw_end              ; every column skipped
 cw_sync:                               ; IME = 0: poll for mode 2 (or 1)
         ldh     a, (STATR)
         and     #3
@@ -1928,7 +2130,8 @@ cn_u:   ld      d, c                   ; U: pairs
 ; ---------------------------------------------------------------
 ; check_view (make CHECK=1, hardware test): compare the bank copy_view
 ; just wrote (r_dst) with this image: the uniform cores (c_desc) as
-; (lo, hi), vbuf everywhere else. Reads poll STAT like copy_vbuf. ->
+; (lo, hi), vbuf everywhere else. A column copy_view skipped (T == B)
+; has its core at c_desc + 6, + 7. Reads poll STAT like copy_vbuf. ->
 ; A = mismatching row pairs (255 at most).
 ; ---------------------------------------------------------------
         .area   _HRAM
@@ -1953,13 +2156,25 @@ ck_col:
         ld      l, a
         ldh     a, (_h_seg+1)
         ld      h, a
-        inc     hl
+        ld      a, (hl+)               ; T
+        ld      b, a
         ld      a, (hl+)               ; core start
         ld      c, a
         ld      a, (hl+)               ; core end
+        ld      d, a
+        ld      a, (hl+)               ; B
+        cp      b
+        jr      NZ, 6$
+        push    hl                     ; T == B: skipped, core at +6, +7
+        inc     hl
+        inc     hl
+        ld      a, (hl+)
+        ld      c, a
+        ld      d, (hl)
+        pop     hl
+6$:     ld      a, d
         sub     c
         ldh     (_h_cn), a             ; core rows (0: none)
-        inc     hl
         ld      a, (hl+)
         ldh     (_h_clo), a
         ld      a, (hl+)

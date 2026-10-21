@@ -452,6 +452,43 @@ tiles).
   stress test (300 random objects per view, 314k projections) culled none
   of the 1,836 visible ones; `tools/sim/cull_check.py` reruns it.
 - Builds 29-31 confirmed on a physical DMG (2026-10-20).
+- Rejected (2026-10-20, measured at build 31): casting the next image
+  inside copy_view's halts. The copy idles only ~13.9k T per image over
+  the bench views (~12.1k at the start view); slots after chained bursts
+  average 54/78 T and the longest are 150-174 T, while pausing the copy
+  for a chunk costs >= ~212 T (push/pop of the copy's registers, call/ret,
+  resume jump). Ceiling ~30 lines if every idle T were free, ~0 in
+  practice. A STAT-interrupt copy is worse (+210-245 lines: ~376 T of
+  CPU per 3-4 bytes, none on sprite lines). Shrinking the view is out
+  (owner's call). 20 fps (<= 462 lines) still needs ~115-135 lines cut;
+  the copy's busy CPU is the biggest target (cu_chain 31.9k, cn_loop
+  10.8k, cw_3l 9.7k, cw_chain 9.6k, cw_col 8.1k T per copy).
+- Copy-speed candidates measured at build 31 (2026-10-20, copysim,
+  `tools/sim/scratch_p0.py`; lines per copy, baseline 227.5 bench /
+  193.4 start steady). Dropped: SP-sourced V bursts (`pop` 2 bytes):
+  after the preload a pair costs pop + 2 stores = 36 T vs 40, and the
+  SP setup per V piece (~52 T) leaves 21 T handover slack; every burst
+  size tried breaks the 40 T rule. Periodic V rows as U: ~0, whole
+  periodic V pieces are 0.2-0.3 per copy and splitting pieces costs
+  ~1.7 lines per piece end. A per-line burst table from sprite counts:
+  the lookup makes band halts up to 210 T late (mode-3 writes). Not
+  picked (under 40 lines each): gun-only band 5V/8U when no billboard
+  is visible + 4V/7U sync bursts (-12.6 / -10.9, simulated ok), leaner
+  phase 1 (span union 4.6k + OAM band scan 3.5k T; ~-6..-10), faster
+  `cw_next` (~508 T a piece end; ~-7..-12 realistic), unrolled VBlank
+  copy (-3..-17, depends on the real VBL ISR length).
+- Build 32 (C5b, column skip): copy_view's phase 1 keeps per VRAM bank
+  and tile column the 16 ray bytes it last copied there (`c_key`, r_top,
+  r_bot, r_wt, r_clr: all a column's pixels depend on) and skips a column
+  whose bytes are unchanged; `view_reset()` invalidates the keys. Exact:
+  `bench.py --cmp` 0/408 random and 0/1083 `--motion` views (44.6% of
+  columns skipped); CHECK 00 in gearboy and on a DMG. Gearboy profile,
+  lines per image: still start view copy ~199 -> 68, total ~575 -> 433;
+  holding Right copy 217.6 -> 153.0, total 584.4 -> 517.3. copysim per
+  copy: walk 64/image 214 -> 179; a view sharing no column costs ~+19
+  (key compare ~8-9k T). A copy where every column is skipped ends
+  right after phase 1. Next: a matched column doesn't need fill_col
+  either (render-side saving, fill/cast plan).
 - Ideas not done: two-colour wall textures, a ranged enemy or floor-4 boss, difficulty and
   a score screen, footstep/alert sounds.
 - Test display-path changes in **mGBA or hardware** — gearboy does not

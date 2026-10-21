@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     31u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     32u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -72,6 +72,7 @@ int16_t r_rdx, r_rdy, r_stx, r_sty;   /* column-0 ray dir + per-column step, 8.8
 uint8_t r_tc, r_cb[2], r_pt[2], r_mxt, r_mnb, r_lo, r_hi;
 uint16_t r_dst;
 uint8_t r_vh[64];            /* copy_view: span last copied per bank+column */
+extern uint8_t c_key[512];   /* copy_view: column keys per bank (render.s) */
 uint8_t vbuf[2048];          /* 128x64 bitmap in column-major tile order */
 
 /* Defined in render.s, which relies on their order (per-ray arrays at
@@ -848,13 +849,17 @@ static void draw_map(void)
     if (seen[((uint16_t)stairs_y << 5) + stairs_x]) plot_cell(stairs_y, stairs_x, 0u);
 }
 
-/* Forget both banks' spans: the next two copy_view calls copy everything.
- * Needed at boot and whenever something else writes view tiles 0..127. */
+/* Forget both banks' spans and column keys: the next two copy_view calls
+ * copy everything. Needed at boot and whenever something else writes view
+ * tiles 0..127. */
 static void view_reset(void)
 {
     uint8_t i;
 
-    for (i = 0u; i < 32u; i++) { r_vh[i] = 0u; r_vh[i + 32u] = 64u; }
+    for (i = 0u; i < 32u; i++) {
+        r_vh[i] = 0u; r_vh[i + 32u] = 64u;
+        c_key[(uint16_t)i << 4] = 0xFFu;   /* tops are <= 31: never matches */
+    }
 }
 
 static uint8_t hud_dir = 0xFFu;

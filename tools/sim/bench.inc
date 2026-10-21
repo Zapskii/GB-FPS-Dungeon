@@ -8,6 +8,10 @@ volatile uint32_t b_t_r, b_t_s;
 volatile uint16_t b_t_c;
 uint8_t b_seg[241], b_vh[64];
 volatile uint8_t b_bank;
+#ifdef HAVE_KEY
+extern uint8_t c_key[512];
+uint8_t b_key[512];             /* c_key before the copy (copysim.py) */
+#endif
 static volatile uint16_t t_ovf;
 
 static void tim_isr(void) { t_ovf++; }
@@ -60,6 +64,9 @@ void main(void)
         b_bank ^= 1u;
         r_dst = b_bank ? 0x9000u : 0x8000u;
         for (uint8_t q = 0u; q < 64u; q++) b_vh[q] = r_vh[q];   /* pre-copy history (copysim.py) */
+#ifdef HAVE_KEY
+        memcpy(b_key, c_key, 512u);
+#endif
         TAC_REG = 0x04u;                 /* 1024 T per tick: no ISR during the copy */
         TIMA_REG = 0u;
         copy_view();
