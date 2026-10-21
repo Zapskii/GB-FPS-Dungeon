@@ -18,6 +18,8 @@ Build number: the two digits in the middle of the HUD's bottom row
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
+Releases: **v1.0** = build 32 (2026-10-21), ROM on the GitHub release page.
+
 ## Build
 
     make            # docker gbdk-dev -> dungeon.gb (32 KB)
