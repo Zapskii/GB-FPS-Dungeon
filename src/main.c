@@ -48,7 +48,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     32u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     33u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -1401,7 +1401,7 @@ static uint8_t title_screen(void)
     DISPLAY_OFF;
     set_bkg_data(FONT_BASE, FONT_N, font_tiles);
     draw_frame();
-    banner(1u, "DUNGEON");
+    banner(1u, "FPS DUNGEON");
     banner(2u, "ESCAPE 4 FLOORS");
     banner(13u, "PRESS START");
     banner(14u, can_load ? "A LOAD SAVE" : "");

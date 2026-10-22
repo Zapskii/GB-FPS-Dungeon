@@ -14,11 +14,11 @@ around the view, HUD compass, hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **32**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **33**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
-Releases: **v1.0** = build 32 (2026-10-21), ROM on the GitHub release page.
+Releases: **v1.0** = build 32 (2026-10-21), **v1.1** = build 33 (2026-10-22, title reads FPS DUNGEON), ROMs on the GitHub release page.
 
 ## Build
 
