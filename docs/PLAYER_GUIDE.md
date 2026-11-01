@@ -4,6 +4,8 @@ You wake on the first of four floors of a dungeon. Each floor is a new
 random maze. Find the key, open the door, take the stairs down. Clear
 floor 4 to escape.
 
+![The title screen on a Super Game Boy, framed by the stone-brick border](img/screenshot.png)
+
 ## Controls
 
 | Button | Action |
