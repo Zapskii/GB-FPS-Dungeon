@@ -18,8 +18,7 @@ Build number: the two digits in the middle of the HUD's bottom row
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
-Releases: **v1.0** = build 32 (2026-10-21), **v1.1** = build 33 (2026-10-22, title reads FPS DUNGEON), ROMs on the GitHub release page.
-Build 34 adds a Super Game Boy border (stone bricks, `make border` regenerates it from `tools/sgb/stone_art.py` via [GB-SGB-Tooling](https://github.com/Zapskii/GB-SGB-Tooling)).
+Releases: **v1.0** = build 32 (2026-10-21), **v1.1** = build 33 (2026-10-22, title reads FPS DUNGEON), **v1.2** = build 34 (2026-11-01, Super Game Boy border, license), ROMs on the GitHub release page.
 
 ## Build
 
@@ -28,6 +27,17 @@ Build 34 adds a Super Game Boy border (stone bricks, `make border` regenerates i
 
 No local GBDK needed: the Makefile runs `/opt/gbdk/bin/lcc` inside the
 `gbdk-dev` image.
+
+    make border     # regenerate the SGB border (src/border_data.c)
+
+The Super Game Boy border (stone bricks, 56 tiles, one palette) is drawn by
+`tools/sgb/stone_art.py`, packed by
+[GB-SGB-Tooling](https://github.com/Zapskii/GB-SGB-Tooling)'s `mkborder.py`
+(expected at `~/GB-SGB-Tooling`, override with `SGBTOOL=`) and converted by
+png2asset. The output is committed, so plain `make` doesn't need the tooling.
+`main()` sends the border before `init_screen()` (the transfer overwrites
+VRAM); `-Wm-ys` sets the header's SGB flag. Checked with GB-SGB-Tooling's
+PyBoy byte test and Gearboy pixel check, and in mGBA; not yet on a real SGB.
 
 ## Controls
 
@@ -411,8 +421,9 @@ tiles).
     almost every row ragged; the start view is the speed gate.
   - Checked in gearboy: start, turn, walk, shoot, map, floor 2, CHECK
     00 throughout. Confirmed on a physical DMG as part of build 28.
-- ROM: ~24 KB of 32 KB used (~8 KB free), MBC1+RAM+BATTERY since build
-  25 with 8 KB SRAM (3 save slots use 7.5 KB). More floors or assets
+- ROM: ~30 KB of 32 KB used (~2.5 KB free at 0x6E2A-0x77FF plus 512 B
+  after rtabs; the SGB border took ~4.5 KB in build 34),
+  MBC1+RAM+BATTERY since build 25 with 8 KB SRAM (3 save slots use 7.5 KB). More floors or assets
   past 32 KB need ROM banking. WRAM: ~6.4 KB of 8 KB used.
 - Build I tested OK in mGBA (2026-10-20, enforces mode-3 VRAM blocking).
   Still worth watching: an AI rebuild in an open room can take ~1 frame.

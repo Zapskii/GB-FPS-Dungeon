@@ -91,3 +91,8 @@ Press Start on either screen to begin a new run.
   catch you.
 - If you're at full health, leave the heart. It'll still be there when
   you need it.
+
+## Super Game Boy
+
+On a Super Game Boy (or an emulator set to SGB mode) the game is framed by a
+stone-brick border. On a regular Game Boy nothing changes.
