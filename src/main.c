@@ -23,6 +23,9 @@
 #include "sfx.h"
 #include "frame.h"
 #include "gun.h"
+#include <gb/sgb.h>
+#include "sgb_border.h"
+#include "border_data.h"
 
 #define VIEW_X0  16u      /* viewport top-left on screen, px */
 #define VIEW_Y0  32u
@@ -48,7 +51,7 @@
 #define HUD_INV_S (HUD_BASE + 21u)
 #define HUD_INV_W (HUD_BASE + 22u)
 #define HUD_GOLD  183u                  /* gem, after the HUD set */
-#define BUILD     33u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
+#define BUILD     34u                   /* HUD row 1 middle, 2 digits: bump every hand-off */
 #define HUD_MAX_HP 5u
 
 const uint8_t tiles[2][16] = {
@@ -1468,6 +1471,20 @@ static void intro(void)
 void main(void)
 {
     uint8_t last_vbl, tick = 0u, pad_prev = 0u, fire_cd = 0u, i;
+
+    /* SGB border first: the transfer trashes VRAM, init_screen reloads it.
+     * 4 frames for a PAL SNES. No-op on DMG. */
+    DISPLAY_ON;
+    for (i = 4u; i; i--) vsync();
+    set_sgb_border(border_data_tiles, sizeof(border_data_tiles),
+                   border_data_map, sizeof(border_data_map),
+                   (const unsigned char *)border_data_palettes, sizeof(border_data_palettes));
+    if (sgb_check()) {
+        /* PAL01: plain greys for the game screen (some emulators start black) */
+        static const uint8_t pal01[16] = { (SGB_PAL_01 << 3) | 1,
+            0xFF, 0x7F, 0x94, 0x52, 0x4A, 0x29, 0x00, 0x00 };
+        sgb_transfer((uint8_t *)pal01);
+    }
 
     init_screen();
     sfx_init();

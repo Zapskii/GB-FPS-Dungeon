@@ -1,0 +1,19 @@
+GB-SGB-Tooling
+Copyright (C) 2026 Simon Blythe
+
+This project is licensed under the GNU General Public License, version 2
+(GPLv2), with the linking exception below -- the same terms as the GBDK-2020
+library. sgb_border.c is derived from the GBDK-2020 example
+gbdk-lib/examples/gb/sgb_border (https://github.com/gbdk-2020/gbdk-2020) and
+remains under GBDK-2020's GPLv2 + linking exception.
+
+Linking exception:
+
+As a special exception, if you link this library with other files,
+to produce an executable, this library does not by itself cause
+the resulting executable to be covered by the GNU General Public
+License. This exception does not however invalidate any other
+reasons why the executable file might be covered by the
+GNU General Public License.
+
+In practice: a Game Boy ROM built with sgb_border.c does not have to be GPL.

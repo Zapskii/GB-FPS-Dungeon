@@ -14,11 +14,12 @@ around the view, HUD compass, hearts and gold. The
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
 Build number: the two digits in the middle of the HUD's bottom row
-(`BUILD` in `src/main.c`, now **33**) identify the current build; it goes
+(`BUILD` in `src/main.c`, now **34**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
 letters up to Y; the save build was briefly S).
 
 Releases: **v1.0** = build 32 (2026-10-21), **v1.1** = build 33 (2026-10-22, title reads FPS DUNGEON), ROMs on the GitHub release page.
+Build 34 adds a Super Game Boy border (stone bricks, `make border` regenerates it from `tools/sgb/stone_art.py` via [GB-SGB-Tooling](https://github.com/Zapskii/GB-SGB-Tooling)).
 
 ## Build
 
@@ -516,3 +517,18 @@ tiles).
   statics such as `ex`/`ey`/`ealive` sit just after `cam_x`/`cam_a`).
 - Instruction cost discipline: T-cycles are 4× M-cycles; `ld (de),a` +
   `inc de` is 16 T, so a 320-byte copy is ~7,700 T, not ~2,000.
+
+## License
+
+Free for non-commercial use under the [PolyForm Noncommercial License 1.0.0](LICENSE):
+play it, share it, study and modify the source, but keep the
+`Required Notice:` copyright line (credit) with any copy. Selling the game, or
+using its code in anything sold, needs a separate commercial license; contact
+[Zapskii](https://github.com/Zapskii).
+
+`src/sgb_border.c` and `src/sgb_border.h` come from
+[GB-SGB-Tooling](https://github.com/Zapskii/GB-SGB-Tooling), derived from
+GBDK-2020's `sgb_border` example. They stay under GPLv2
+([licenses/GPL-2.0.txt](licenses/GPL-2.0.txt)) with the GBDK linking exception
+([licenses/GBDK-LINKING-EXCEPTION.txt](licenses/GBDK-LINKING-EXCEPTION.txt)),
+which lets the ROM built from them ship under the terms above.
