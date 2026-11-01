@@ -13,6 +13,10 @@ around the view, HUD compass, hearts and gold. The
 3D view is a real 128×64 bitmap (64 rays, 2-px columns) drawn into tile
 data and double-buffered across the two BG tile banks; HUD in the Window.
 
+**How to play:** see the [Player Guide](docs/PLAYER_GUIDE.md) for controls,
+items, enemies and saving. Download the ROM from the
+[latest release](https://github.com/Zapskii/GB-FPS-Dungeon/releases/latest).
+
 Build number: the two digits in the middle of the HUD's bottom row
 (`BUILD` in `src/main.c`, now **34**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
