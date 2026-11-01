@@ -17,6 +17,8 @@ data and double-buffered across the two BG tile banks; HUD in the Window.
 items, enemies and saving. Download the ROM from the
 [latest release](https://github.com/Zapskii/GB-FPS-Dungeon/releases/latest).
 
+![FPS Dungeon's title screen on a Super Game Boy, framed by the stone-brick border](docs/img/screenshot.png)
+
 Build number: the two digits in the middle of the HUD's bottom row
 (`BUILD` in `src/main.c`, now **34**) identify the current build; it goes
 up by one every hand-off. Builds before 25 used one character (1–9, then
