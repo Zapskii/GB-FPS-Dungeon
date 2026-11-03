@@ -1,4 +1,4 @@
-[Play online at retro.zapski.com](https://retro.zapski.com)
+🎮 [Play online](https://retro.zapski.com/play/fps-dungeon) · 📖 [Read the review](https://retro.zapski.com/blog/fps-dungeon-game-boy-review) · [retro.zapski.com](https://retro.zapski.com)
 
 # GB-FPS-Dungeon — DMG raycaster crawler
 
